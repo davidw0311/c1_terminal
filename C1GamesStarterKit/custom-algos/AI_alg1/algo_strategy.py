@@ -4,7 +4,7 @@ import math
 import warnings
 from sys import maxsize
 import json
-
+import numpy as np
 
 """
 Most of the algo code you write will be in this file unless you create new
@@ -56,7 +56,7 @@ class AlgoStrategy(gamelib.AlgoCore):
         gamelib.debug_write('Performing turn {} of your custom algo strategy'.format(game_state.turn_number))
         game_state.suppress_warnings(True)  #Comment or remove this line to enable warnings.
 
-        self.starter_strategy(game_state)
+        self.mcts_strategy(game_state)
 
         game_state.submit_turn()
 
@@ -65,7 +65,95 @@ class AlgoStrategy(gamelib.AlgoCore):
     NOTE: All the methods after this point are part of the sample starter-algo
     strategy and can safely be replaced for your custom algo.
     """
-
+    
+    
+    def choose_frontline_defence_row(self, game_state):
+        self.FRONTLINE_DEFENCE_ROW = 11
+    
+    def build_initial_defences(self, game_state):
+        # builds a turret in each corner with walls
+        # then depending on FRONTLINE_DEFENCE_ROW, puts a row of 4 turrets evenly spread out with walls in front
+        
+        turret_locations = []
+        turret_locations += [[i, 12] for i in [1,26]]
+        turret_locations += [[i, self.FRONTLINE_DEFENCE_ROW-1] for i in [6,11,16,21]]
+        
+        # attempt_spawn will try to spawn units if we have resources, and will check if a blocking unit is already there
+        game_state.attempt_spawn(TURRET, turret_locations)
+        
+        self.initial_turret_locations = turret_locations
+        # Place walls in front of turrets to soak up damage for them
+        wall_locations = []
+        wall_locations += [[i, 13] for i in [0,1,2,25,26,27]]
+        wall_locations += [[i, 12] for i in [2,3,4,23,24,25]]
+        wall_locations += [[i, self.FRONTLINE_DEFENCE_ROW] for i in [2,4,6,7,9,10,11,12,14,15,16,17,18,20,21,23,25]]
+        game_state.attempt_spawn(WALL, wall_locations)
+        self.initial_wall_locations = wall_locations
+        
+        hole_locations = []
+        hole_locations += [[i, self.FRONTLINE_DEFENCE_ROW] for i in [5,8,13,19,22]]
+        self.hole_locations = hole_locations
+        
+    
+    def repair_initial_defences(self, game_state):
+        game_state.attempt_spawn(TURRET, self.initial_turret_locations)
+        game_state.attempt_spawn(WALL, self.initial_wall_locations)
+    
+    def get_best_attacking_path(self, game_state):
+        self.hole_index = np.random.randint(len(self.hole_locations))
+    
+    def temporary_block_other_holes(self, game_state):
+        # blocks all the other holes in front line defence, and removes them the very next turn
+        blocked_holes = [coord for coord in self.hole_locations if coord != self.hole_locations[self.hole_index]]
+        
+        game_state.attempt_spawn(WALL, blocked_holes)
+        game_state.attempt_remove(blocked_holes)
+    
+    def build_backline_defences(self, game_state):
+        self.backline_hole_col = 7 if self.hole_index>2 else 20
+        backline_walls = []
+        
+        backline_walls += [[3, 10], [24,10], [4,9], [23,9]]
+        backline_walls += [[i, 8] for i in range(5,23) if i!=self.backline_hole_col]
+        
+        game_state.attempt_spawn(WALL, backline_walls)
+        
+    
+    def get_defending_interceptor_number(self, game_state):
+        # calculate how many interceptors we should send, dummy for now
+        return 2
+    
+    def send_interceptors(self, game_state):
+        # sends interceptors right below the backline hole
+        deploy_location = [self.backline_hole_col, 6]
+        num_interceptors = self.get_defending_interceptor_number(game_state)
+        
+        for i in range(num_interceptors):
+            game_state.attempt_spawn(INTERCEPTOR, deploy_location)
+            
+            
+    def choose_defence_move(self, game_state):
+        # if 
+        if game_state.turn_number == 0:
+            self.choose_frontline_defence_row(game_state)
+            self.build_initial_defences(game_state)
+            game_state.attempt_spawn(INTERCEPTOR, [[7,6],[20,6]])
+        else:
+            self.repair_initial_defences(game_state)
+            self.get_best_attacking_path(game_state)
+            self.temporary_block_other_holes(game_state)
+            self.build_backline_defences(game_state)
+            game_state.attempt_remove([[7,8], [20,8]])
+            
+            self.send_interceptors(game_state)
+    
+    def choose_offence_move(self, game_state):
+        pass
+    
+    def mcts_strategy(self, game_state):
+        self.choose_defence_move(game_state)
+        self.choose_offence_move(game_state)
+            
     def starter_strategy(self, game_state):
         """
         For defense we will use a spread out layout and some interceptors early on.
@@ -135,6 +223,7 @@ class AlgoStrategy(gamelib.AlgoCore):
         """
         Send out interceptors at random locations to defend our base from enemy moving units.
         """
+        deploy_location = []
         # We can spawn moving units on our edges so a list of all our edge locations
         friendly_edges = game_state.game_map.get_edge_locations(game_state.game_map.BOTTOM_LEFT) + game_state.game_map.get_edge_locations(game_state.game_map.BOTTOM_RIGHT)
         

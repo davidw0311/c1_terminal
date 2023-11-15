@@ -76,6 +76,7 @@ class AlgoStrategy(gamelib.AlgoCore):
         
         turret_locations = []
         turret_locations += [[i, 12] for i in [1,26]]
+        turret_locations += [[i, 11] for i in [3,24]]
         turret_locations += [[i, self.FRONTLINE_DEFENCE_ROW-1] for i in [6,11,16,21]]
         
         # attempt_spawn will try to spawn units if we have resources, and will check if a blocking unit is already there
@@ -121,16 +122,31 @@ class AlgoStrategy(gamelib.AlgoCore):
     
     def get_defending_interceptor_number(self, game_state):
         # calculate how many interceptors we should send, dummy for now
-        return 2
+        return [1,1]
     
     def send_interceptors(self, game_state):
         # sends interceptors right below the backline hole
-        deploy_location = [self.backline_hole_col, 6]
+        
         num_interceptors = self.get_defending_interceptor_number(game_state)
         
-        for i in range(num_interceptors):
+        for i in range(num_interceptors[0]):
+            deploy_location = [7, 6]
             game_state.attempt_spawn(INTERCEPTOR, deploy_location)
             
+        for i in range(num_interceptors[1]):
+            deploy_location = [20, 6]
+            game_state.attempt_spawn(INTERCEPTOR, deploy_location)
+    
+    def upgrade_structures(self, game_state):
+        game_state.attempt_upgrade(self.initial_turret_locations)
+        
+        important_wall_locations = []
+        important_wall_locations += [[i, 13] for i in [0,1,2,25,26,27]]
+        important_wall_locations += [[i, 12] for i in [2,3,4,23,24,25]]
+        important_wall_locations += [[i, self.FRONTLINE_DEFENCE_ROW] for i in [4,6,11,16,21,23]]   
+        important_wall_locations += [[3,10], [4,9], [5,8], [22,8], [23,9], [24,10]]   
+          
+        game_state.attempt_upgrade(self.initial_wall_locations)
             
     def choose_defence_move(self, game_state):
         # if 
@@ -146,10 +162,22 @@ class AlgoStrategy(gamelib.AlgoCore):
             game_state.attempt_remove([[7,8], [20,8]])
             
             self.send_interceptors(game_state)
-    
+            self.upgrade_structures(game_state)
+            
     def choose_offence_move(self, game_state):
-        pass
-    
+        if game_state.turn_number % 3 == 1:
+            # To simplify we will just check sending them from back left and right
+            scout_spawn_location_options = [[13, 0], [14, 0]]
+            best_location = self.least_damage_spawn_location(game_state, scout_spawn_location_options)
+            
+            if np.random.rand() > 0.3:
+                game_state.attempt_spawn(SCOUT, best_location, 1000)
+            else:
+                game_state.attempt_spawn(DEMOLISHER, best_location, 1000)
+
+            support_locations = [[13, 2], [14, 2], [13, 3], [14, 3]]
+            game_state.attempt_spawn(SUPPORT, support_locations)
+
     def mcts_strategy(self, game_state):
         self.choose_defence_move(game_state)
         self.choose_offence_move(game_state)

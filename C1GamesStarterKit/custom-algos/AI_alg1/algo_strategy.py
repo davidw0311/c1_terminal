@@ -197,7 +197,7 @@ class AlgoStrategy(gamelib.AlgoCore):
                         "structures": []
                         })
 
-        highest_utility = 0 
+        highest_utility = -np.inf
         best_action = possible_actions[0]
         for a in possible_actions:
             if a['utility'] > highest_utility:
@@ -213,6 +213,7 @@ class AlgoStrategy(gamelib.AlgoCore):
     
     def choose_HLA(game_state):
         #TODO: implement better logic here, to decide at high level whether to attack, defend, or stall, or use some mixed strategy
+        # depend on past opponent attacks, threat level based on opponet's base reconfiguration last turn, how much mp they have
         strategy = {'attack': 0.0, 'defend': 0.0, 'stall': 0.0}
         
         our_mp = game_state.get_resource(MP, 0)
@@ -243,7 +244,9 @@ class AlgoStrategy(gamelib.AlgoCore):
             pass
         
         self.repair_initial_defences(game_state)
-            
+    
+    
+    ## BELOW ARE STARTER CODE METHODS, NOT USED  
     def starter_strategy(self, game_state):
         """
         For defense we will use a spread out layout and some interceptors early on.

@@ -66,9 +66,9 @@ class AlgoStrategy(gamelib.AlgoCore):
     strategy and can safely be replaced for your custom algo.
     """
     
-    
     def choose_frontline_defence_row(self, game_state):
         self.FRONTLINE_DEFENCE_ROW = 11
+        self.BACKLINE_DEFENCE_ROW = 8
     
     def build_initial_defences(self, game_state):
         # builds a turret in each corner with walls
@@ -76,6 +76,7 @@ class AlgoStrategy(gamelib.AlgoCore):
         
         turret_locations = []
         turret_locations += [[i, 12] for i in [1,26]]
+        turret_locations += [[i, 11] for i in [3,24]]
         turret_locations += [[i, self.FRONTLINE_DEFENCE_ROW-1] for i in [6,11,16,21]]
         
         # attempt_spawn will try to spawn units if we have resources, and will check if a blocking unit is already there
@@ -90,9 +91,13 @@ class AlgoStrategy(gamelib.AlgoCore):
         game_state.attempt_spawn(WALL, wall_locations)
         self.initial_wall_locations = wall_locations
         
-        hole_locations = []
-        hole_locations += [[i, self.FRONTLINE_DEFENCE_ROW] for i in [5,8,13,19,22]]
-        self.hole_locations = hole_locations
+        frontline_hole_locations = []
+        frontline_hole_locations += [[i, self.FRONTLINE_DEFENCE_ROW] for i in [5,8,13,19,22]]
+        self.frontline_hole_locations = frontline_hole_locations
+        
+        backline_hole_locations = []
+        backline_hole_locations += [[i, self.BACKLINE_DEFENCE_ROW] for i in [7,20]]
+        self.backline_hole_locations = backline_hole_locations
         
     
     def repair_initial_defences(self, game_state):
@@ -102,35 +107,44 @@ class AlgoStrategy(gamelib.AlgoCore):
     def get_best_attacking_path(self, game_state):
         self.hole_index = np.random.randint(len(self.hole_locations))
     
-    def temporary_block_other_holes(self, game_state):
-        # blocks all the other holes in front line defence, and removes them the very next turn
-        blocked_holes = [coord for coord in self.hole_locations if coord != self.hole_locations[self.hole_index]]
-        
-        game_state.attempt_spawn(WALL, blocked_holes)
-        game_state.attempt_remove(blocked_holes)
     
     def build_backline_defences(self, game_state):
-        self.backline_hole_col = 7 if self.hole_index>2 else 20
+
         backline_walls = []
         
         backline_walls += [[3, 10], [24,10], [4,9], [23,9]]
-        backline_walls += [[i, 8] for i in range(5,23) if i!=self.backline_hole_col]
+        backline_walls += [[i, self.BACKLINE_DEFENCE_ROW] for i in range(5,23) if [i, self.BACKLINE_DEFENCE_ROW] not in self.backline_holes]
         
         game_state.attempt_spawn(WALL, backline_walls)
         
     
     def get_defending_interceptor_number(self, game_state):
         # calculate how many interceptors we should send, dummy for now
-        return 2
+        return [1,1]
     
     def send_interceptors(self, game_state):
         # sends interceptors right below the backline hole
-        deploy_location = [self.backline_hole_col, 6]
+        
         num_interceptors = self.get_defending_interceptor_number(game_state)
         
-        for i in range(num_interceptors):
+        for i in range(num_interceptors[0]):
+            deploy_location = [7, 6]
             game_state.attempt_spawn(INTERCEPTOR, deploy_location)
             
+        for i in range(num_interceptors[1]):
+            deploy_location = [20, 6]
+            game_state.attempt_spawn(INTERCEPTOR, deploy_location)
+    
+    def upgrade_structures(self, game_state):
+        game_state.attempt_upgrade(self.initial_turret_locations)
+        
+        important_wall_locations = []
+        important_wall_locations += [[i, 13] for i in [0,1,2,25,26,27]]
+        important_wall_locations += [[i, 12] for i in [2,3,4,23,24,25]]
+        important_wall_locations += [[i, self.FRONTLINE_DEFENCE_ROW] for i in [4,6,11,16,21,23]]   
+        important_wall_locations += [[3,10], [4,9], [5,8], [22,8], [23,9], [24,10]]   
+          
+        game_state.attempt_upgrade(self.initial_wall_locations)
             
     def choose_defence_move(self, game_state):
         # if 
@@ -146,14 +160,93 @@ class AlgoStrategy(gamelib.AlgoCore):
             game_state.attempt_remove([[7,8], [20,8]])
             
             self.send_interceptors(game_state)
+            self.upgrade_structures(game_state)
+    
+    def calculate_demolisher_utility(self, game_state, spawn_location, front_hole, back_hole, num_units):
+        return 0
+    
+    def calculate_scout_utility(self, game_state, spawn_location, front_hole, back_hole, num_units):
+        return 0
+    
     
     def choose_offence_move(self, game_state):
-        pass
+
+        possible_actions = []
+        
+        # To simplify we will just check sending them from back left and right
+        spawn_location_options = [[13, 0], [14, 0]]
+        for back_hole in self.backline_hole_locations:
+            for front_hole in self.frontline_hole_locations:
+                for spawn_location in spawn_location_options:
+                    
+                    num_units = game_state.get_resource(MP, 0)//game_state.type_cost(SCOUT)[MP]
+                    scout_utility = self.calculate_scout_utility(game_state, spawn_location, front_hole, back_hole, num_units)
+                    possible_actions.append({
+                        "utility": scout_utility, 
+                        "holes": [front_hole, back_hole],
+                        "units": [{'type': SCOUT, 'num': num_units, 'loc': spawn_location}],
+                        "structures": []
+                        })
+                    
+                    num_units = game_state.get_resource(MP, 0)//game_state.type_cost(DEMOLISHER)[MP]
+                    demolisher_utility = self.calculate_demolisher_utility(game_state, spawn_location, front_hole, back_hole, num_units)
+                    possible_actions.append({
+                        "utility": demolisher_utility, 
+                        "holes": [front_hole, back_hole],
+                        "units": [{'type': DEMOLISHER, 'num': num_units, 'loc': spawn_location}],
+                        "structures": []
+                        })
+
+        highest_utility = -np.inf
+        best_action = possible_actions[0]
+        for a in possible_actions:
+            if a['utility'] > highest_utility:
+                best_action = a
+                highest_utility = a['utility']
+        
+        for unit in best_action['units']:
+            game_state.attempt_spawn(unit['type'], unit['loc'], unit['num'])
+
+        for structure in best_action['structures']:
+            game_state.attempt_spawn(structure['type'], structure['loc'])
+       
+    
+    def choose_HLA(game_state):
+        #TODO: implement better logic here, to decide at high level whether to attack, defend, or stall, or use some mixed strategy
+        # depend on past opponent attacks, threat level based on opponet's base reconfiguration last turn, how much mp they have
+        strategy = {'attack': 0.0, 'defend': 0.0, 'stall': 0.0}
+        
+        our_mp = game_state.get_resource(MP, 0)
+        our_sp = game_state.get_resource(SP, 0)
+        
+        enemy_mp = game_state.get_resource(MP, 1)
+        enemy_sp = game_state.get_resource(SP, 1)
+        
+        if enemy_mp > 10:
+            strategy = {'attack': 0.0, 'defend': 1.0, 'stall': 0.0}
+        elif our_mp > 10:
+            strategy = {'attack': 1.0, 'defend': 0.0, 'stall': 0.0}
+        else:
+            strategy = {'attack': 0.0, 'defend': 0.0, 'stall': 1.0}
+        
+        return strategy
     
     def mcts_strategy(self, game_state):
-        self.choose_defence_move(game_state)
-        self.choose_offence_move(game_state)
-            
+        hla_strategy = self.choose_HLA(game_state)
+        
+        num = np.random.rand()
+        if num <= hla_strategy['attack']:
+            self.choose_offence_move(game_state)
+        elif num <= hla_strategy['attack'] + hla_strategy['defend']:
+            self.choose_defence_move(game_state)
+        else:
+            # do nothing
+            pass
+        
+        self.repair_initial_defences(game_state)
+    
+    
+    ## BELOW ARE STARTER CODE METHODS, NOT USED  
     def starter_strategy(self, game_state):
         """
         For defense we will use a spread out layout and some interceptors early on.

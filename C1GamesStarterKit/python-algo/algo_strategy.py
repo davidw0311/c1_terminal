@@ -154,6 +154,119 @@ class AlgoStrategy(gamelib.AlgoCore):
             units can occupy the same space.
             """
 
+    def _destroy_unit(self, game_state, unit, loc):
+        pass
+
+    def _move_unit(self, game_state, unit, new_loc):
+        pass
+
+    def _is_valid_attacker(self, game_state, location, attacker):
+        atk_range = attacker.attackRange
+        loc = [attacker.x, attacker.x]
+        return atk_range >= game_state.game_map.distance_between_locations(location, loc)
+
+    def _taken_dmg(self, game_state, location, health, player_index):
+        damage = 0
+        attackers = game_state.get_attackers(location, player_index)
+        for attacker in attackers:
+            if not self._is_valid_attacker(game_state, location, attacker):
+                continue
+            damage += attacker.damage_f
+            if damage >= health:
+                break
+        return damage
+
+    def _dealt_dmg(self, game_state, unit):
+        unit_to_attack = game_state.get_target(unit)
+        damage = unit.damage_f if unit_to_attack.stationary else unit.damage_i
+        return unit_to_attack, damage
+
+
+    def _spawn_units(self, game_state, actions):
+        # [(UNIT, num, location), (UNIT, num, location), ...]
+        mobiles = {}
+        for action in actions:
+            unit, num, location = action
+            num_spawned = game_state.attempt_spawn(unit, location, num=num)
+            if unit in [SCOUT, DEMOLISHER, INTERCEPTOR]:
+                if unit in mobiles:
+                    mobiles[unit][1] = mobiles[unit][1] + num_spawned
+                else:
+                    mobiles[unit] = [location, num_spawned]
+        return mobiles    
+
+
+    def _interact(self, game_state, friendly_mobiles, enemy_mobiles):
+        # If mobiles are destroyed, update the dictionary with count / remove
+        structure_destroyed = False
+        unit_dmg_0 = 0
+        unit_dmg_1 = 0
+        
+        # For all friendlies, find if they will attack anyone at their current location
+
+        # If they do, find the target and compute the damage * num
+
+        # If target is structure, add min(damage, health) to unit_dmg_0
+        
+        # Mark target for destruction if necessary
+
+        # C
+
+
+        return unit_dmg_0, unit_dmg_1, structure_destroyed
+
+    def _step(self, game_state, friendly_mobiles, enemy_mobiles):
+        # If mobiles hit pass edge, then just delete them from the dictionary and return the dmg done
+
+        pass
+
+    def _get_path_for_mobiles(self, game_state, mobiles):
+        for unit, details in mobiles.items():
+            location = details[0]
+            path = game_state.find_path_to_edge(location)
+
+            if len(details) == 2:
+                details.append(path)
+            else:
+                details[-1] = path
+        return mobiles
+
+    def simulate_action_pair(self, game_state, action_0, action_1):
+        """
+        Define an action as unit, num, location.
+
+        Local copy of game_state is deep copied to prevent mutation. Simply resumbit the chosen
+        action on the original game_state to submit the action outside of this function.
+        """
+
+        # Do deepcopy here..
+
+        dmg_utility_0 = 0
+        dmg_utility_1 = 0
+        health_utility_0 = 0
+        health_utility_1 = 0
+
+        friendly_mobiles = self._spawn_units(game_state, action_0)
+        enemy_mobiles = self._spawn_units(game_state, action_1)
+
+        friendly_mobiles = self._get_path_for_mobiles(game_state, friendly_mobiles)
+        enemy_mobiles = self._get_path_for_mobiles(game_state, enemy_mobiles)
+
+        while len(friendly_mobiles) + len(enemy_mobiles):
+            unit_dmg_0, unit_dmg_1, struct_destroyed = self._interact(game_state, friendly_mobiles, enemy_mobiles)
+            dmg_utility_0 += unit_dmg_0
+            dmg_utility_1 += unit_dmg_1
+            # Update routing when structure is destroyed as pathing may change
+            if struct_destroyed:
+                friendly_mobiles = self._get_path_for_mobiles(game_state, friendly_mobiles)
+                enemy_mobiles = self._get_path_for_mobiles(game_state, enemy_mobiles)
+            health_dmg_0, health_dmg_1 = self._step(game_state, friendly_mobiles, enemy_mobiles)
+            health_utility_0 += health_dmg_0 
+            health_utility_1 += health_dmg_1
+
+        return dmg_utility_0, health_utility_0, dmg_utility_1, health_utility_1
+
+
     def demolisher_line_strategy(self, game_state):
         """
         Build a line of the cheapest stationary unit so our demolisher can attack from long range.

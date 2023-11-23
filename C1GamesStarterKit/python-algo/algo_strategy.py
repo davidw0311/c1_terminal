@@ -5,6 +5,7 @@ import warnings
 from sys import maxsize
 import json
 
+from gamelib.game_state import GameState 
 
 """
 Most of the algo code you write will be in this file unless you create new
@@ -178,6 +179,9 @@ class AlgoStrategy(gamelib.AlgoCore):
 
     def _dealt_dmg(self, game_state, unit):
         unit_to_attack = game_state.get_target(unit)
+        if unit_to_attack is None:
+            return None
+
         damage = unit.damage_f if unit_to_attack.stationary else unit.damage_i
         return unit_to_attack, damage
 
@@ -189,10 +193,17 @@ class AlgoStrategy(gamelib.AlgoCore):
             unit, num, location = action
             num_spawned = game_state.attempt_spawn(unit, location, num=num)
             if unit in [SCOUT, DEMOLISHER, INTERCEPTOR]:
-                if unit in mobiles:
-                    mobiles[unit][1] = mobiles[unit][1] + num_spawned
+                unit_stack = [x for x in game_state.game_map[location] if x.unit_type == unit]
+
+                # mobiles.append([unit, unit_stack, location])
+
+                if location not in mobiles:
+                    mobiles[location] = [[unit, unit_stack, -1, None]]
                 else:
-                    mobiles[unit] = [location, num_spawned]
+                    mobiles[location].append([unit, unit_stack, -1, None])
+
+
+
         return mobiles    
 
 
@@ -203,6 +214,9 @@ class AlgoStrategy(gamelib.AlgoCore):
         unit_dmg_1 = 0
         
         # For all friendlies, find if they will attack anyone at their current location
+        for unit_type, unit_stack, location, path in friendly_mobiles:
+            self._dealt_dmg(game_state, )
+            pass
 
         # If they do, find the target and compute the damage * num
 
@@ -221,17 +235,17 @@ class AlgoStrategy(gamelib.AlgoCore):
         pass
 
     def _get_path_for_mobiles(self, game_state, mobiles):
-        for unit, details in mobiles.items():
-            location = details[0]
-            path = game_state.find_path_to_edge(location)
+        for location, unit_list in mobiles.items():
+            for i, (unit_type, unit_stack, edge, path) in enumerate(unit_list):
+                if edge == -1:
+                    edge = game_state.get_target_edge(location)
+                
+                path = game_state.find_path_to_edge(location, edge)
+                unit_list[i] = [unit_type, unit_stack, edge, path]
 
-            if len(details) == 2:
-                details.append(path)
-            else:
-                details[-1] = path
         return mobiles
 
-    def simulate_action_pair(self, game_state, action_0, action_1):
+    def simulate_action_pair(self, game_state, action_0=None, action_1=None):
         """
         Define an action as unit, num, location.
 
@@ -240,14 +254,15 @@ class AlgoStrategy(gamelib.AlgoCore):
         """
 
         # Do deepcopy here..
+        game_state = GameState(game_state.config, game_state.serialized_string)
 
         dmg_utility_0 = 0
         dmg_utility_1 = 0
         health_utility_0 = 0
         health_utility_1 = 0
 
-        friendly_mobiles = self._spawn_units(game_state, action_0)
-        enemy_mobiles = self._spawn_units(game_state, action_1)
+        friendly_mobiles = self._spawn_units(game_state, action_0) if action_0 is not None else {}
+        enemy_mobiles = self._spawn_units(game_state, action_1) if action_1 is not None else {}
 
         friendly_mobiles = self._get_path_for_mobiles(game_state, friendly_mobiles)
         enemy_mobiles = self._get_path_for_mobiles(game_state, enemy_mobiles)

@@ -155,15 +155,39 @@ class AlgoStrategy(gamelib.AlgoCore):
             units can occupy the same space.
             """
 
-    def _destroy_unit(self, game_state, unit, loc):
-        pass
+    def _attack_unit(self, game_state, unit, loc, damage):
+        structures_destroyed = False
+        unit_dmg = 0
+        all_units_at_loc = game_state.game_map[loc]
+        units_of_type = [_unit_of_type for _unit_of_type in all_units_at_loc if _unit_of_type.unit_type == unit.unit_type]
+        units_to_destroy = []
+        while damage > 0 and len(units_of_type) > 0:
+            unit = units_of_type[-1]
+            dmg_done = min(unit.health, damage)
+            
+            # Unit will be destroyed
+            if unit.health <= damage:
+                structures_destroyed = unit.stationary
+                unit.health = 0
+                damage -= unit.health
 
-    def _move_unit(self, game_state, unit, new_loc):
-        pass
+                units_to_destroy.append((loc, units_of_type.pop()))
+
+            else:
+                # Update unit health
+                unit.health -= damage
+                damage = 0
+
+            # Impossible to stack multiple structures. If unit.stationary, both condition in if 
+            # statement will result in termination of while loop
+            if unit.stationary:
+                unit_dmg += dmg_done
+
+        return unit_dmg, structures_destroyed, units_to_destroy
 
     def _is_valid_attacker(self, game_state, location, attacker):
         atk_range = attacker.attackRange
-        loc = [attacker.x, attacker.x]
+        loc = (attacker.x, attacker.y)
         return atk_range >= game_state.game_map.distance_between_locations(location, loc)
 
     def _taken_dmg(self, game_state, location, health, player_index):
@@ -187,22 +211,19 @@ class AlgoStrategy(gamelib.AlgoCore):
 
 
     def _spawn_units(self, game_state, actions):
-        # [(UNIT, num, location), (UNIT, num, location), ...]
+        # Stores a set of units spawned as a dictionary with location as key and a list of units at the location.
+        # One element in the list would indicate a specific type of unit, its respective GameUnit, initial edge and path
         mobiles = {}
         for action in actions:
             unit, num, location = action
             num_spawned = game_state.attempt_spawn(unit, location, num=num)
             if unit in [SCOUT, DEMOLISHER, INTERCEPTOR]:
                 unit_stack = [x for x in game_state.game_map[location] if x.unit_type == unit]
-
-                # mobiles.append([unit, unit_stack, location])
-
+                edge = game_state.get_target_edge(location)
                 if location not in mobiles:
-                    mobiles[location] = [[unit, unit_stack, -1, None]]
+                    mobiles[location] = [[unit, unit_stack, edge, None]]
                 else:
-                    mobiles[location].append([unit, unit_stack, -1, None])
-
-
+                    mobiles[location].append([unit, unit_stack, edge, None])
 
         return mobiles    
 
@@ -214,9 +235,26 @@ class AlgoStrategy(gamelib.AlgoCore):
         unit_dmg_1 = 0
         
         # For all friendlies, find if they will attack anyone at their current location
-        for unit_type, unit_stack, location, path in friendly_mobiles:
-            self._dealt_dmg(game_state, )
-            pass
+        for location, unit_list in friendly_mobiles.items():
+            for unit_details in unit_list:
+                unit = unit_details[1][0]
+                action_result = self._dealt_dmg(game_state, unit)
+                if unit is None:
+                    continue
+                # Target found, damage done
+                unit_to_attack, damage = action_result
+
+                # if unit_to_attack.stationary:
+                #     unit_dmg_0 += damage
+
+                # Compute number of units destroyed / health lowered and apply to the game units
+                num_attack_units = len(unit_details[1])
+                effective_dmg = damage * num_attack_units
+
+                attack_location = unit_to_attack.x, unit_to_attack.y
+
+                
+
 
         # If they do, find the target and compute the damage * num
 
@@ -229,20 +267,51 @@ class AlgoStrategy(gamelib.AlgoCore):
 
         return unit_dmg_0, unit_dmg_1, structure_destroyed
 
+    def _inner_step(self, game_state, mobiles):
+        new_mobiles = {}
+        health_dmg = 0
+        for _, unit_list in mobiles.items():
+            for unit_details in unit_list:
+                if len(unit_details[3]) == 1:
+                    # Score!
+                    health_dmg += len(unit_details)
+                    continue            
+
+
+                new_location = unit_details[3][1]
+                new_path = unit_details[3][1:]
+                unit_details[3] = new_path
+                
+                if new_location not in new_mobiles:
+                    new_mobiles[new_location] = [unit_details]
+                else:
+                    new_mobiles[new_location].append(unit_details)
+
+                # Add the game units into the list
+                game_state.game_map[new_location].extend(unit_details[1])
+
+        return health_dmg, new_mobiles
+
+
     def _step(self, game_state, friendly_mobiles, enemy_mobiles):
         # If mobiles hit pass edge, then just delete them from the dictionary and return the dmg done
+        for location in friendly_mobiles.keys():
+            game_state.game_map.remove_unit(location)
 
-        pass
+        for location in enemy_mobiles.keys():
+            game_state.game_map.remove_unit(location)
+        
+        health_dmg_0, friendly_mobiles = self._inner_step(friendly_mobiles)
+        health_dmg_1, enemy_mobiles = self._inner_step(friendly_mobiles)
+
+        return health_dmg_0, friendly_mobiles, health_dmg_1, enemy_mobiles
+
 
     def _get_path_for_mobiles(self, game_state, mobiles):
         for location, unit_list in mobiles.items():
-            for i, (unit_type, unit_stack, edge, path) in enumerate(unit_list):
-                if edge == -1:
-                    edge = game_state.get_target_edge(location)
-                
+            for i, (_, _, edge, path) in enumerate(unit_list):
                 path = game_state.find_path_to_edge(location, edge)
-                unit_list[i] = [unit_type, unit_stack, edge, path]
-
+                unit_list[i][3] = path
         return mobiles
 
     def simulate_action_pair(self, game_state, action_0=None, action_1=None):
@@ -268,14 +337,16 @@ class AlgoStrategy(gamelib.AlgoCore):
         enemy_mobiles = self._get_path_for_mobiles(game_state, enemy_mobiles)
 
         while len(friendly_mobiles) + len(enemy_mobiles):
-            unit_dmg_0, unit_dmg_1, struct_destroyed = self._interact(game_state, friendly_mobiles, enemy_mobiles)
+            unit_dmg_0, unit_dmg_1, struct_destroyed = \
+                self._interact(game_state, friendly_mobiles, enemy_mobiles)
             dmg_utility_0 += unit_dmg_0
             dmg_utility_1 += unit_dmg_1
             # Update routing when structure is destroyed as pathing may change
             if struct_destroyed:
                 friendly_mobiles = self._get_path_for_mobiles(game_state, friendly_mobiles)
                 enemy_mobiles = self._get_path_for_mobiles(game_state, enemy_mobiles)
-            health_dmg_0, health_dmg_1 = self._step(game_state, friendly_mobiles, enemy_mobiles)
+            health_dmg_0, friendly_mobiles, health_dmg_1, enemy_mobiles = \
+                self._step(game_state, friendly_mobiles, enemy_mobiles)
             health_utility_0 += health_dmg_0 
             health_utility_1 += health_dmg_1
 

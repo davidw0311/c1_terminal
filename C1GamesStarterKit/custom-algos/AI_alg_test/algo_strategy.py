@@ -47,7 +47,7 @@ class AlgoStrategy(gamelib.AlgoCore):
         self.scored_on_locations = []
         self.spawn_stats = {}
         self.enemy_spawn_history = {}
-        self.enemy_attacking_rounds = [] # records the round number where enemy dealt greater than 200 damage
+        self.enemy_attacking_rounds = [] # records the round number where enemy dealt damange or took away health from us
 
     def on_turn(self, turn_state):
         """
@@ -61,8 +61,10 @@ class AlgoStrategy(gamelib.AlgoCore):
         gamelib.debug_write('Performing turn {} of mcts strategy'.format(game_state.turn_number))
         game_state.suppress_warnings(True)  #Comment or remove this line to enable warnings.
 
+        game_state.attempt_spawn(INTERCEPTOR, [[7,6], [20,6]], 1)
         self.mcts_strategy(game_state)
         self.tally_spawn_stats(game_state)
+        
         game_state.submit_turn()
 
 
@@ -131,9 +133,9 @@ class AlgoStrategy(gamelib.AlgoCore):
         
         important_wall_locations = []
         important_wall_locations += [[i, 13] for i in [0,1,2,25,26,27]]
-        important_wall_locations += [[i, 12] for i in [2,3,4,23,24,25]]
+        important_wall_locations += [[i, 12] for i in [3,4,23,24]]
         important_wall_locations += [[i, self.FRONTLINE_DEFENCE_ROW] for i in [4,6,11,16,21,23]]   
-        important_wall_locations += [[3,10], [4,9], [5,8], [22,8], [23,9], [24,10]]   
+        # important_wall_locations += [[3,10], [4,9], [5,8], [22,8], [23,9], [24,10]]   
           
         game_state.attempt_upgrade(self.initial_wall_locations)
     
@@ -185,50 +187,53 @@ class AlgoStrategy(gamelib.AlgoCore):
             speed = 1
         elif unit == DEMOLISHER:
             speed = 2
-        gamelib.debug_write('enemy spawn loc', spawn_loc)
+        # gamelib.debug_write('enemy spawn loc', spawn_loc)
         enemy_path = copied_game_state.find_path_to_edge(spawn_loc)
-        
-        interceptor_speed = 4
-        interceptor_range = 4.3
-        
-        possible_interceptor_spawns = [[7,6], [9,4], [11,2], [13,0], [14,0],[16,2],[18,4],[20,6]]
-        interceptor_utility = {}
-        for interceptor_spawn_location in possible_interceptor_spawns:
-            frames_in_range = 0 # count how many frames the unit will be seen by our interceptor
-            interceptor_path = copied_game_state.find_path_to_edge(interceptor_spawn_location)
-
-            interceptor_index = -1
-            earliest_interception_frame = len(enemy_path)
-            for enemy_index in range(len(enemy_path)):
-                if enemy_index%(interceptor_speed//speed) == 0:
-                    interceptor_index += 1
-                if interceptor_index >= len(interceptor_path):
-                    break
-                enemy_position = enemy_path[enemy_index]
-                interceptor_position = interceptor_path[interceptor_index]
-                
-                if copied_game_state.game_map.distance_between_locations(enemy_position, interceptor_position) <= interceptor_range:
-                    frames_in_range += 1
-                    earliest_interception_frame = min(earliest_interception_frame, enemy_index)
-                    # gamelib.debug_write('can intercept on frame', earliest_interception_frame)
-                    # gamelib.debug_write('enemy path: ', enemy_path)
-                    # gamelib.debug_write('our path', interceptor_path)
-            interceptor_utility[tuple(interceptor_spawn_location)] = {'earliest_frame':earliest_interception_frame, 'number_of_frames': frames_in_range}
-            
-        
-        best_interceptor_locations = [(k,v) for k,v in sorted(interceptor_utility.items(), key=lambda x:x[1]['earliest_frame'])]
         
         interceptable = False
         location = None
         number_of_interceptors = 0
         interception_utility = 0 
-        for loc, info in best_interceptor_locations:
-            if info['number_of_frames'] > 0:
-                interceptable = True
-                location = loc
-                number_of_interceptors = max(1, int(num/info['number_of_frames'])) 
-                interception_utility = (100 - info['earliest_frame'])
-                break
+        
+        if enemy_path: # if the unit is spawned where there is structure, this will return None
+            interceptor_speed = 4
+            interceptor_range = 4.3
+            
+            possible_interceptor_spawns = [[7,6], [9,4], [11,2], [13,0], [14,0],[16,2],[18,4],[20,6]]
+            interceptor_utility = {}
+            for interceptor_spawn_location in possible_interceptor_spawns:
+                frames_in_range = 0 # count how many frames the unit will be seen by our interceptor
+                interceptor_path = copied_game_state.find_path_to_edge(interceptor_spawn_location)
+
+                interceptor_index = -1
+                earliest_interception_frame = len(enemy_path)
+                for enemy_index in range(len(enemy_path)):
+                    if enemy_index%(interceptor_speed//speed) == 0:
+                        interceptor_index += 1
+                    if interceptor_index >= len(interceptor_path):
+                        break
+                    enemy_position = enemy_path[enemy_index]
+                    interceptor_position = interceptor_path[interceptor_index]
+                    
+                    if copied_game_state.game_map.distance_between_locations(enemy_position, interceptor_position) <= interceptor_range:
+                        frames_in_range += 1
+                        earliest_interception_frame = min(earliest_interception_frame, enemy_index)
+                        # gamelib.debug_write('can intercept on frame', earliest_interception_frame)
+                        # gamelib.debug_write('enemy path: ', enemy_path)
+                        # gamelib.debug_write('our path', interceptor_path)
+                interceptor_utility[tuple(interceptor_spawn_location)] = {'earliest_frame':earliest_interception_frame, 'number_of_frames': frames_in_range}
+                
+            
+            best_interceptor_locations = [(k,v) for k,v in sorted(interceptor_utility.items(), key=lambda x:x[1]['earliest_frame'])]
+        
+        
+            for loc, info in best_interceptor_locations:
+                if info['number_of_frames'] > 0:
+                    interceptable = True
+                    location = loc
+                    number_of_interceptors = max(1, int(num/info['number_of_frames'])) 
+                    interception_utility = (100 - info['earliest_frame'])
+                    break
             
         return interceptable, location, number_of_interceptors, interception_utility
     
@@ -243,9 +248,6 @@ class AlgoStrategy(gamelib.AlgoCore):
         
         
     def choose_defence_move(self, game_state):
-        # if 
-        
-        
         
         enemy_spawn_locations = self.predict_enemy_spawn_locations(game_state) # {(x,y): {prob:p, demolisher_prob, scout_prob}}
         # gamelib.debug_write('enemy spawn locations', enemy_spawn_locations)
@@ -367,12 +369,13 @@ class AlgoStrategy(gamelib.AlgoCore):
         enemy_mp = game_state.get_resource(MP, 1)
         enemy_sp = game_state.get_resource(SP, 1)
         
-        if enemy_mp > 5:
-            strategy = {'attack': 0.0, 'defend': 1.0, 'stall': 0.0}
-        elif our_mp > 10:
-            strategy = {'attack': 1.0, 'defend': 0.0, 'stall': 0.0}
+        
+        if our_mp > 6:
+            strategy = {'attack': 0.7, 'defend': 0.3, 'stall': 0.0}
         else:
-            strategy = {'attack': 0.0, 'defend': 0.0, 'stall': 1.0}
+            strategy = {'attack': 0.0, 'defend': 1.0, 'stall': 0.0}
+        # else:
+        #     strategy = {'attack': 0.0, 'defend': 0.0, 'stall': 1.0}
         
         return strategy
     
@@ -490,7 +493,7 @@ class AlgoStrategy(gamelib.AlgoCore):
             self.spawn_stats[turn_num]['id_info'][id] = {"coord":None, "health_taken": 0, "damage_dealt": 0}
             
             self.spawn_stats[turn_num]['id_info'][id]['coord'] = coord
-            if coord not in self.spawn_stats[turn_num]['coord_to_unit']:
+            if coord not in self.spawn_stats[turn_num]['coord_to_unit']: # how many of this type of unit has spawned at this location
                 self.spawn_stats[turn_num]['coord_to_unit'][coord] = {DEMOLISHER:0, SCOUT:0, INTERCEPTOR:0}
             
             self.spawn_stats[turn_num]['coord_to_unit'][coord][unit] += 1

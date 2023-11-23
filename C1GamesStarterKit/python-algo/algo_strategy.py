@@ -74,7 +74,10 @@ class AlgoStrategy(gamelib.AlgoCore):
         For offense we will use long range demolishers if they place stationary units near the enemy's front.
         If there are no stationary units to attack in the front, we will send Scouts to try and score quickly.
         """
-        self.simulate_action_pair(game_state, [(SCOUT, 3, [12, 1])], [(SCOUT, 3, [26, 15])])
+        # To simulate an action pair, send in the game state you want to simulate it in, as well as a list of actions for both the user and the enemy. One action
+        # is described by a tuple. The unit, the number of units, as well as the position to execute the action. The position of the troops is w.r.t to the user.
+        # dmg_util_0, health_util_0, dmg_util_1, health_util_1 = self.simulate_action_pair(game_state, [(SCOUT, 3, [12, 1])], [(SCOUT, 3, [26, 15])])
+
         # First, place basic defenses
         self.build_defences(game_state)
         # Now build reactive defenses based on where the enemy scored

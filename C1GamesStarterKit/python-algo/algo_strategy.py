@@ -160,7 +160,7 @@ class AlgoStrategy(gamelib.AlgoCore):
         structures_destroyed = False
         unit_dmg = 0
         all_units_at_loc = game_state.game_map[loc]
-        units_of_type = [_unit_of_type for _unit_of_type in all_units_at_loc if _unit_of_type.unit_type == unit.unit_type]
+        units_of_type = [_unit_of_type for _unit_of_type in all_units_at_loc if _unit_of_type.unit_type == unit.unit_type and _unit_of_type.player_index == unit.player_index]
         units_to_destroy = []
         while damage > 0 and len(units_of_type) > 0:
             unit = units_of_type[-1]
@@ -263,6 +263,8 @@ class AlgoStrategy(gamelib.AlgoCore):
                 unit_dmg += _unit_dmg
                 structure_destroyed = structure_destroyed or _structures_destroyed
                 units_to_destroy.extend(_units_to_destroy)
+
+        gamelib.debug_write()
 
         return unit_dmg, structure_destroyed, units_to_destroy
                 

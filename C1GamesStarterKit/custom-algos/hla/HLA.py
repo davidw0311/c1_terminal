@@ -1,4 +1,7 @@
 def choose_HLA(self, game_state):
+    # Initialize the variable to store the data for the past few rounds
+    self.enemy_action = []
+    self.our_action = []
     # TOD0: implement better logic here, to decide at high level whether to attack, defend, or stall, or use some mixed strategy
     # depending on past opponent attacks, threat level based on opponet's base reconfiguration last turn, how much mp they have
     # somehow store a "memory" of past opponent's attacks, check where their walls are planning to be removed
@@ -10,7 +13,7 @@ def choose_HLA(self, game_state):
     our_health = game_state.get_resources(game_state.player_index, gamelib.GameState.RESOURCE_HEALTH)
     enemy_health = game_state.get_resources(1 - game_state.player_index, gamelib.GameState.RESOURCE_HEALTH)
 
-    # Get Iur Structure Units Count
+    # Get Our Structure Units Count
     our_structure_count = game_state.get_resource(game_state.SP)
     # Get Enemy Structure Units Count
     enemy_structure_count = game_state.get_resource(game_state.SP, 1)
@@ -48,6 +51,8 @@ def choose_HLA(self, game_state):
 
     if game_state.turn_number != 1:
         old_enemy_health = enemy_health
-        old_our_health = our_health        
+        old_our_health = our_health
+        old_enemy_structure_count = enemy_structure_count
+        old_our_structure_count = our_structure_count
 
     return strategy

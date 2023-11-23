@@ -30,6 +30,7 @@ def choose_HLA(self, game_state):
         old_our_health = self.our_action['health']
         old_enemy_structure_count = self.enemy_action['structure_count']
         old_our_structure_count = self.our_action['structure_count']
+        
         # Calculate the subtraction of health change between enemy and me
         # If health_subtraction > 0, this means that the enemy's health loss is greater than ours
         health_subtraction = ( our_health - old_our_health ) - ( enemy_health - old_enemy_health )

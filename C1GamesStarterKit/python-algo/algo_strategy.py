@@ -74,7 +74,7 @@ class AlgoStrategy(gamelib.AlgoCore):
         For offense we will use long range demolishers if they place stationary units near the enemy's front.
         If there are no stationary units to attack in the front, we will send Scouts to try and score quickly.
         """
-        self.simulate_action_pair(game_state, [(SCOUT, 3, [13, 0])], [(SCOUT, 3, [27, 14])])
+        self.simulate_action_pair(game_state, [(SCOUT, 3, [12, 1])], [(SCOUT, 3, [26, 15])])
         # First, place basic defenses
         self.build_defences(game_state)
         # Now build reactive defenses based on where the enemy scored
@@ -171,7 +171,6 @@ class AlgoStrategy(gamelib.AlgoCore):
                 structures_destroyed = unit.stationary
                 unit.health = 0
                 damage -= unit.health
-
                 units_to_destroy.append((loc, units_of_type.pop()))
 
             else:
@@ -219,7 +218,8 @@ class AlgoStrategy(gamelib.AlgoCore):
             unit, num, location = action
 
             if enemy:
-                game_state.game_map.add_unit(unit, location, player_index=1)
+                for i in range(num):
+                    game_state.game_map.add_unit(unit, location, player_index=1)
                 num_spawned = num
             else:
                 num_spawned = game_state.attempt_spawn(unit, location, num=num)
@@ -245,7 +245,6 @@ class AlgoStrategy(gamelib.AlgoCore):
             for unit_details in unit_list:
                 unit = unit_details[1][0]
                 action_result = self._dealt_dmg(game_state, unit)
-                gamelib.debug_write(f"Unit: {unit} Action Result: [{action_result}]")
                 if action_result is None:
                     continue
                 # Target found, get damage done
@@ -264,49 +263,37 @@ class AlgoStrategy(gamelib.AlgoCore):
                 structure_destroyed = structure_destroyed or _structures_destroyed
                 units_to_destroy.extend(_units_to_destroy)
 
-        gamelib.debug_write()
-
         return unit_dmg, structure_destroyed, units_to_destroy
                 
 
     def _interact(self, game_state, friendly_mobiles, enemy_mobiles):
         gamelib.debug_write("Interacting")
-        gamelib.debug_write(f"Friendly Mobile: [{friendly_mobiles}]")
-        gamelib.debug_write(f"Enemy Mobile: [{enemy_mobiles}]")
         # If mobiles are destroyed, update the dictionary with remove
         structure_destroyed = False
 
-        gamelib.debug_write(f"Friendlies Interacting")
         unit_dmg_0, _structure_destroyed, enemies_to_destroy = \
             self._inner_interact(game_state, friendly_mobiles, enemy_mobiles)
         structure_destroyed = structure_destroyed or _structure_destroyed
 
-        gamelib.debug_write(f"Enemies Interacting")
         unit_dmg_1, _structure_destroyed, friendlies_to_destroy = \
             self._inner_interact(game_state, enemy_mobiles, friendly_mobiles)
         structure_destroyed = structure_destroyed or _structure_destroyed
                 
-        gamelib.debug_write(f"enemies to destroy: {len(enemies_to_destroy)}")
-        gamelib.debug_write(f"{enemies_to_destroy}")
         for loc, unit in enemies_to_destroy:
-            gamelib.debug_write(f"At loc: [{loc}], [{game_state.game_map[loc]}]")
+            gamelib.debug_write(f"Enemy to destroy {unit}")
             game_state.game_map[loc].remove(unit)
-            if loc in friendly_mobiles and unit in friendly_mobiles[loc]:
-                friendly_mobiles[loc].remove(unit)
-
-        gamelib.debug_write(f"Enemies destroyed")
-                
-        gamelib.debug_write(f"Friendlies to destroy: {len(friendlies_to_destroy)}")
-        gamelib.debug_write(f"{friendlies_to_destroy}")
+            if loc in enemy_mobiles:
+                for unit_details in enemy_mobiles[loc]:
+                    if unit in unit_details[1]:
+                        unit_details[1].remove(unit)
 
         for loc, unit in friendlies_to_destroy:
-            gamelib.debug_write(f"At loc: [{loc}], [{game_state.game_map[loc]}]")
+            gamelib.debug_write(f"Friendly to destroy {unit}")
             game_state.game_map[loc].remove(unit)
-            if loc in enemy_mobiles and unit in enemy_mobiles[loc]:
-                enemy_mobiles[loc].remove(unit)
-
-        gamelib.debug_write(f"friendlies destroyed")
-
+            if loc in friendly_mobiles:
+                for unit_details in friendly_mobiles[loc]:
+                    if unit in unit_details[1]:
+                        unit_details[1].remove(unit)
 
         return unit_dmg_0, unit_dmg_1, structure_destroyed
 
@@ -315,10 +302,14 @@ class AlgoStrategy(gamelib.AlgoCore):
         health_dmg = 0
         for _, unit_list in mobiles.items():
             for unit_details in unit_list:
-                if len(unit_details[3]) == 1:
+                if unit_details[3] is None:
+                    continue
+
+                if unit_details[3] is not None and len(unit_details[3]) == 1:
                     # Score!
-                    health_dmg += len(unit_details)
-                    continue            
+                    gamelib.debug_write(f"{len(unit_details[1])} units scored! unit_details")
+                    health_dmg += len(unit_details[1])
+                    continue
 
                 new_location = unit_details[3][1]
                 new_path = unit_details[3][1:]
@@ -374,6 +365,8 @@ class AlgoStrategy(gamelib.AlgoCore):
         # Should suffice for a deep copy as game map is reinitialized
         game_state = GameState(game_state.config, game_state.serialized_string)
 
+        gamelib.debug_write("Start simulation")
+
         dmg_utility_0 = 0
         dmg_utility_1 = 0
         health_utility_0 = 0
@@ -381,8 +374,6 @@ class AlgoStrategy(gamelib.AlgoCore):
 
         friendly_mobiles = self._spawn_units(game_state, action_0) if action_0 is not None else {}
         enemy_mobiles = self._spawn_units(game_state, action_1, enemy=True) if action_1 is not None else {}
-
-        gamelib.debug_write(friendly_mobiles, enemy_mobiles)
 
         friendly_mobiles = self._get_path_for_mobiles(game_state, friendly_mobiles)
         enemy_mobiles = self._get_path_for_mobiles(game_state, enemy_mobiles)

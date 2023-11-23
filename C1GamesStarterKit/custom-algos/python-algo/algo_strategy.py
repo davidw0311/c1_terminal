@@ -4,7 +4,7 @@ import math
 import warnings
 from sys import maxsize
 import json
-
+import numpy as np
 
 """
 Most of the algo code you write will be in this file unless you create new
@@ -174,7 +174,10 @@ class AlgoStrategy(gamelib.AlgoCore):
 
         # Now spawn demolishers next to the line
         # By asking attempt_spawn to spawn 1000 units, it will essentially spawn as many as we have resources for
-        game_state.attempt_spawn(SCOUT, [24, 10], 1000)
+        if np.random.rand() > 0.3:
+            game_state.attempt_spawn(DEMOLISHER, [24, 10], 1000)
+        else:
+            game_state.attempt_spawn(SCOUT, [24, 10], 1000)
 
     def least_damage_spawn_location(self, game_state, location_options):
         """

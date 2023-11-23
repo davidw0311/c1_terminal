@@ -6,6 +6,7 @@ from sys import maxsize
 import json
 import numpy as np
 from copy import deepcopy
+import math
 """
 Most of the algo code you write will be in this file unless you create new
 modules yourself. Start by modifying the 'on_turn' function.
@@ -163,11 +164,15 @@ class AlgoStrategy(gamelib.AlgoCore):
         
         for coord, info in self.enemy_spawn_history.items():
             most_likely_spawn_locations[coord] = {
-                "prob": info['times_spawned_here']/num_attacking_rounds if num_attacking_rounds > 0 else 0, 
-                "demolisher_prob": info['times_spawned_demolisher']/info['times_spawned_here'] if info['times_spawned_here'] > 0 else 0, 
-                "demolisher_num": info['total_demolisher_count']/info['times_spawned_demolisher'] if info['times_spawned_demolisher'] > 0 else 0, 
-                "scout_prob": info['times_spawned_scout']/info['times_spawned_here'] if info['times_spawned_here'] > 0 else 0, 
-                "scout_num": info['total_scout_count']/info['times_spawned_scout'] if info['times_spawned_scout'] > 0 else 0
+                "prob": info['times_spawned_scout_or_demolisher_here']/num_attacking_rounds if num_attacking_rounds > 0 else 0, 
+                "demolisher_prob": info['times_spawned_demolisher']/info['times_spawned_scout_or_demolisher_here'] if info['times_spawned_scout_or_demolisher_here'] > 0 else 0, 
+                "demolisher_num": math.ceil(info['total_demolisher_count']/info['times_spawned_demolisher']) if info['times_spawned_demolisher'] > 0 else 0, 
+                "scout_prob": info['times_spawned_scout']/info['times_spawned_scout_or_demolisher_here'] if info['times_spawned_scout_or_demolisher_here'] > 0 else 0, 
+                "scout_num": math.ceil(info['total_scout_count']/info['times_spawned_scout']) if info['times_spawned_scout'] > 0 else 0,
+                
+                # don't need interceptor for defence, maybe use stats on offence
+                # "interceptor_prob": info['times_spawned_interceptor']/info['times_spawned_here'] if info['times_spawned_here'] > 0 else 0, 
+                # "interceptor_num": info['total_interceptor_count']/info['times_spawned_interceptor'] if info['times_spawned_interceptor'] > 0 else 0
             }
         return most_likely_spawn_locations
 
@@ -231,8 +236,8 @@ class AlgoStrategy(gamelib.AlgoCore):
                 if info['number_of_frames'] > 0:
                     interceptable = True
                     location = loc
-                    number_of_interceptors = max(1, int(num/info['number_of_frames'])) 
-                    interception_utility = (100 - info['earliest_frame'])
+                    number_of_interceptors = max(1, int(num/info['number_of_frames'])) if unit == SCOUT else max(1, int(num))
+                    interception_utility = (35 - info['earliest_frame']) * 2
                     break
             
         return interceptable, location, number_of_interceptors, interception_utility
@@ -278,7 +283,7 @@ class AlgoStrategy(gamelib.AlgoCore):
                 for back_hole in self.backline_hole_locations:
                     expected_loss = 0 # placeholder for now, calculate with scout and demolisher utility
                     
-                    if demolisher_prob > scout_prob:
+                    if np.random.rand() < demolisher_prob:
                         reachable, interceptor_spawn_loc, interceptor_num, interception_utility = self.check_interceptor_reachability(game_state=game_state, unit=DEMOLISHER, num=demolisher_num, spawn_loc=coord, front_hole=front_hole, back_hole=back_hole)
                         prob = demolisher_prob
                     else:
@@ -414,6 +419,7 @@ class AlgoStrategy(gamelib.AlgoCore):
             if coord not in self.enemy_spawn_history.keys():
                 self.enemy_spawn_history[coord]={
                     "times_spawned_here": 0,
+                    "times_spawned_scout_or_demolisher_here": 0,
                     "times_spawned_scout": 0,
                     "total_scout_count": 0,
                     "times_spawned_demolisher": 0,
@@ -424,6 +430,8 @@ class AlgoStrategy(gamelib.AlgoCore):
                     "damage_dealt": 0
                 }
             self.enemy_spawn_history[coord]['times_spawned_here'] += 1
+            if stats[SCOUT] > 0 or stats[DEMOLISHER] > 0:
+                self.enemy_spawn_history[coord]['times_spawned_scout_or_demolisher_here'] += 1
             if stats[SCOUT] > 0:
                 self.enemy_spawn_history[coord]['times_spawned_scout'] += 1
                 self.enemy_spawn_history[coord]['total_scout_count'] += stats[SCOUT]

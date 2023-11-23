@@ -30,7 +30,7 @@ class AlgoStrategy(gamelib.AlgoCore):
         """ 
         Read in config and perform any initial setup here 
         """
-        # gamelib.debug_write('Configuring your custom algo strategy...')
+        gamelib.debug_write('Configuring your custom algo strategy...')
         self.config = config
         global WALL, SUPPORT, TURRET, SCOUT, DEMOLISHER, INTERCEPTOR, MP, SP
         WALL = config["unitInformation"][0]["shorthand"]
@@ -52,9 +52,8 @@ class AlgoStrategy(gamelib.AlgoCore):
         unit deployments, and transmitting your intended deployments to the
         game engine.
         """
-        
         game_state = gamelib.GameState(self.config, turn_state)
-        # gamelib.debug_write('Performing turn {} of your custom algo strategy'.format(game_state.turn_number))
+        gamelib.debug_write('Performing turn {} of your custom algo strategy'.format(game_state.turn_number))
         game_state.suppress_warnings(True)  #Comment or remove this line to enable warnings.
 
         self.starter_strategy(game_state)

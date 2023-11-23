@@ -18,6 +18,8 @@ Advanced strategy tips:
   board states. Though, we recommended making a copy of the map to preserve 
   the actual current map state.
 """
+global UTILITY_OF_INTERCEPTING_ATTACK
+UTILITY_OF_INTERCEPTING_ATTACK = 10
 
 class AlgoStrategy(gamelib.AlgoCore):
     def __init__(self):
@@ -43,6 +45,8 @@ class AlgoStrategy(gamelib.AlgoCore):
         SP = 0
         # This is a good place to do initial setup
         self.scored_on_locations = []
+        self.spawn_stats = {}
+        self.enemy_spawn_history = {}
 
     def on_turn(self, turn_state):
         """
@@ -56,8 +60,8 @@ class AlgoStrategy(gamelib.AlgoCore):
         gamelib.debug_write('Performing turn {} of your custom algo strategy'.format(game_state.turn_number))
         game_state.suppress_warnings(True)  #Comment or remove this line to enable warnings.
 
-        self.mcts_strategy(game_state)
-
+        # self.mcts_strategy(game_state)
+        self.tally_spawn_stats(game_state)
         game_state.submit_turn()
 
 
@@ -113,27 +117,10 @@ class AlgoStrategy(gamelib.AlgoCore):
         backline_walls = []
         
         backline_walls += [[3, 10], [24,10], [4,9], [23,9]]
-        backline_walls += [[i, self.BACKLINE_DEFENCE_ROW] for i in range(5,23) if [i, self.BACKLINE_DEFENCE_ROW] not in self.backline_holes]
+        backline_walls += [[i, self.BACKLINE_DEFENCE_ROW] for i in range(5,23) if [i, self.BACKLINE_DEFENCE_ROW] not in self.backline_hole_locations]
         
         game_state.attempt_spawn(WALL, backline_walls)
         
-    
-    def get_defending_interceptor_number(self, game_state):
-        # calculate how many interceptors we should send, dummy for now
-        return [1,1]
-    
-    def send_interceptors(self, game_state):
-        # sends interceptors right below the backline hole
-        
-        num_interceptors = self.get_defending_interceptor_number(game_state)
-        
-        for i in range(num_interceptors[0]):
-            deploy_location = [7, 6]
-            game_state.attempt_spawn(INTERCEPTOR, deploy_location)
-            
-        for i in range(num_interceptors[1]):
-            deploy_location = [20, 6]
-            game_state.attempt_spawn(INTERCEPTOR, deploy_location)
     
     def upgrade_structures(self, game_state):
         game_state.attempt_upgrade(self.initial_turret_locations)
@@ -145,25 +132,104 @@ class AlgoStrategy(gamelib.AlgoCore):
         important_wall_locations += [[3,10], [4,9], [5,8], [22,8], [23,9], [24,10]]   
           
         game_state.attempt_upgrade(self.initial_wall_locations)
-            
+    
+    def build_selected_path(self, game_state, front_hole, back_hole):
+        for loc in self.backline_hole_locations:
+            if loc != back_hole:
+                game_state.attempt_spawn(WALL, loc)
+                
+        for loc in self.frontline_hole_locations:
+            if loc != front_hole:
+                game_state.attempt_spawn(WALL, loc)
+        
+    def predict_enemy_spawn_locations(self, game_state):
+        # returns a dictionary of coord: {prob: p, demolisher_prob: dp, demolisher_num: dn, scout_prob: sp, scout_num: sn}  
+        # coord is coordinate of opponent's spawn location as a tuple (x,y)
+        # prob: probablity the opponent will spawn troops here
+        # demolisher_prob: probability a demolisher will be spawned here
+        # demolisher_num: number of estimated demolishers that will be spawned
+        # scout_prob: probability that a scout will be spawned here
+        # scout_num: number of estimated scouts that will be spawned
+        
+        return {
+            (1,1): {"prob": 1, "demolisher_prob": 1.0, "demolisher_num": 10, "scout_prob": 0, "scout_num": 0},
+            (1,2): {"prob": 1, "demolisher_prob": 1.0, "demolisher_num": 10, "scout_prob": 0, "scout_num": 0},
+        }
+
+    
+    def check_interceptor_reachability(self, game_state, unit, num, spawn_loc, front_hole, back_hole):
+        # checks whether an interceptor can intercept an enemy unit spawned at the spawn_loc given front_hole, back_hole
+        # returns 
+        # reachable: True if the unit can be intercepted by interceptors
+        # interceptor_spawn_loc: where the interceptor needs to be spawned (None if not reachable)
+        # interceptor_num: how many interceptors to spawn (0 if not reachable)
+
+        if front_hole == [5, self.FRONTLINE_DEFENCE_ROW] and back_hole == [7, self.BACKLINE_DEFENCE_ROW]:
+            return True, [17,3], 10
+        return False, None, 0
+    
+    def execute_defence_plan(self, game_state, plan):
+        if not plan:
+            return
+        
+        self.build_selected_path(game_state, front_hole=plan['front_hole'], back_hole=plan['back_hole'])
+     
+        game_state.attempt_spawn(INTERCEPTOR, plan['interceptor_loc'], plan['interceptor_num'])
+        gamelib.debug_write('spawning interceptor at using ', plan, 'at', plan['interceptor_loc'] )
+        
+        
     def choose_defence_move(self, game_state):
         # if 
-        if game_state.turn_number == 0:
-            self.choose_frontline_defence_row(game_state)
-            self.build_initial_defences(game_state)
-            game_state.attempt_spawn(INTERCEPTOR, [[7,6],[20,6]])
-        else:
-            self.repair_initial_defences(game_state)
-            self.get_best_attacking_path(game_state)
-            self.temporary_block_other_holes(game_state)
-            self.build_backline_defences(game_state)
-            game_state.attempt_remove([[7,8], [20,8]])
+        
+        self.repair_initial_defences(game_state)
+        self.build_backline_defences(game_state)
+        
+        enemy_spawn_locations = self.predict_enemy_spawn_locations(game_state) # {(x,y): {prob:p, demolisher_prob, scout_prob}}
+        
+        most_likely_locations = {k: v for k, v in sorted(enemy_spawn_locations.items(), key=lambda v: v[1]['prob'])}
+        plans = []
+        best_expected_utility = -np.inf
+        best_plan = None
+        for coord, info in most_likely_locations.items():
+            coord = list(coord)
+            spawn_prob = info['prob']
+            demolisher_prob = info['demolisher_prob']
+            demolisher_num = info['demolisher_num']
             
-            self.send_interceptors(game_state)
-            self.upgrade_structures(game_state)
+            scout_prob = info['scout_prob']
+            scout_num = info['scout_num']
+            plan = {}
+            for front_hole in self.frontline_hole_locations:
+                for back_hole in self.backline_hole_locations:
+                    expected_loss = 0 # placeholder for now, calculate with scout and demolisher utility
+                    
+                    if demolisher_prob > scout_prob:
+                        reachable, interceptor_spawn_loc, interceptor_num = self.check_interceptor_reachability(game_state=game_state, unit=DEMOLISHER, num=demolisher_num, spawn_loc=coord, front_hole=front_hole, back_hole=back_hole)
+                    else:
+                        reachable, interceptor_spawn_loc, interceptor_num = self.check_interceptor_reachability(game_state=game_state, unit=SCOUT, num=scout_num, spawn_loc=coord, front_hole=front_hole, back_hole=back_hole)
+
+                    if reachable:
+                        expected_utility = (UTILITY_OF_INTERCEPTING_ATTACK + expected_loss)*spawn_prob
+                        
+                    else:
+                        expected_utility = expected_loss*spawn_prob
+                        
+                    plan['expected_utility'] = expected_utility
+                    plan['front_hole'] = front_hole
+                    plan['back_hole'] = back_hole
+                    plan['interceptor_loc'] = interceptor_spawn_loc
+                    plan['interceptor_num'] = interceptor_num
+                    
+                    plans.append(plan)
+                    if expected_utility > best_expected_utility:
+                        best_expected_utility = expected_utility
+                        best_plan = plan.copy()
+                        
+        self.execute_defence_plan(game_state, best_plan)                
+        self.upgrade_structures(game_state)
     
     def calculate_demolisher_utility(self, game_state, spawn_location, front_hole, back_hole, num_units):
-        return 0
+        return 0 # TODO: Brandon
     
     def calculate_scout_utility(self, game_state, spawn_location, front_hole, back_hole, num_units):
         return 0
@@ -211,9 +277,12 @@ class AlgoStrategy(gamelib.AlgoCore):
             game_state.attempt_spawn(structure['type'], structure['loc'])
        
     
-    def choose_HLA(game_state):
+    def choose_HLA(self, game_state):
         #TODO: implement better logic here, to decide at high level whether to attack, defend, or stall, or use some mixed strategy
-        # depend on past opponent attacks, threat level based on opponet's base reconfiguration last turn, how much mp they have
+        # depending on past opponent attacks, threat level based on opponet's base reconfiguration last turn, how much mp they have
+        # somehow store a "memory" of past opponent's attacks, check where their walls are planning to be removed
+        
+        #TODO: Shanhe
         strategy = {'attack': 0.0, 'defend': 0.0, 'stall': 0.0}
         
         our_mp = game_state.get_resource(MP, 0)
@@ -232,19 +301,24 @@ class AlgoStrategy(gamelib.AlgoCore):
         return strategy
     
     def mcts_strategy(self, game_state):
+        
+        if game_state.turn_number == 0:
+            self.choose_frontline_defence_row(game_state)
+            self.build_initial_defences(game_state)
+            
         hla_strategy = self.choose_HLA(game_state)
         
         num = np.random.rand()
         if num <= hla_strategy['attack']:
-            self.choose_offence_move(game_state)
+            # self.choose_offence_move(game_state)
+            pass
         elif num <= hla_strategy['attack'] + hla_strategy['defend']:
-            self.choose_defence_move(game_state)
+            self.choose_defence_move(game_state) # TODO: David
         else:
             # do nothing
             pass
         
-        self.repair_initial_defences(game_state)
-    
+        self.repair_initial_defences(game_state)    
     
     ## BELOW ARE STARTER CODE METHODS, NOT USED  
     def starter_strategy(self, game_state):
@@ -393,6 +467,36 @@ class AlgoStrategy(gamelib.AlgoCore):
                 filtered.append(location)
         return filtered
 
+    def tally_spawn_stats(self, game_state):
+        
+        turn_num = game_state.turn_number - 1
+        if turn_num not in self.spawn_stats:
+            gamelib.debug_write('turn num ', turn_num, " not in", self.spawn_stats.keys())
+            return
+        
+        for coord, stats in self.spawn_stats[turn_num]['coord_to_unit'].items():
+            if coord not in self.enemy_spawn_history.keys():
+                self.enemy_spawn_history[coord]={
+                    "times_spawned_here": 0,
+                    "times_spawned_scout": 0,
+                    "times_spawned_demolisher": 0,
+                    "times_spawned_interceptor": 0,
+                    "health_taken": 0,
+                    "damage_dealt": 0
+                }
+            self.enemy_spawn_history[coord]['times_spawned_here'] += 1
+            self.enemy_spawn_history[coord]['times_spawned_scout'] += stats[SCOUT]
+            self.enemy_spawn_history[coord]['times_spawned_demolisher'] += stats[DEMOLISHER]
+            self.enemy_spawn_history[coord]['times_spawned_interceptor'] += stats[INTERCEPTOR]
+            
+        for id, id_info in self.spawn_stats[turn_num]['id_info'].items():
+            spawn_coord = id_info['coord']
+            self.enemy_spawn_history[spawn_coord]['health_taken'] += id_info['health_taken']
+            self.enemy_spawn_history[spawn_coord]['damage_dealt'] += id_info['damage_dealt']
+            
+        
+        gamelib.debug_write("turn num: ", turn_num, "enemy spawn history", self.enemy_spawn_history)
+    
     def on_action_frame(self, turn_string):
         """
         This is the action frame of the game. This function could be called 
@@ -402,17 +506,85 @@ class AlgoStrategy(gamelib.AlgoCore):
         """
         # Let's record at what position we get scored on
         state = json.loads(turn_string)
+        turn_num = state["turnInfo"][1]
         events = state["events"]
+        
+        spawns = events["spawn"]
+        if turn_num not in self.spawn_stats:
+            self.spawn_stats[turn_num] = {'id_info': {}, 'coord_to_unit':{}}
+        
+        
+        for spawn_event in spawns:
+            if spawn_event[3] == 1: # if this is our spawned unit, ignore
+                continue
+            
+            unit = spawn_event[1]
+            if unit == 3:
+                unit = SCOUT
+            elif unit == 4:
+                unit = DEMOLISHER
+            elif unit == 5:
+                unit = INTERCEPTOR
+            else:
+                continue # ignore other spawn events
+            
+            coord = tuple(spawn_event[0])
+                
+            id = spawn_event[2]
+            gamelib.debug_write('spawned unit with id', id)
+            if id in self.spawn_stats[turn_num]['id_info']:
+                continue # we have already recorded this unit
+            
+            self.spawn_stats[turn_num]['id_info'][id] = {"coord":None, "health_taken": 0, "damage_dealt": 0}
+            
+            self.spawn_stats[turn_num]['id_info'][id]['coord'] = coord
+            if coord not in self.spawn_stats[turn_num]['coord_to_unit']:
+                self.spawn_stats[turn_num]['coord_to_unit'][coord] = {DEMOLISHER:0, SCOUT:0, INTERCEPTOR:0}
+            
+            self.spawn_stats[turn_num]['coord_to_unit'][coord][unit] += 1
+        
+        
+        
         breaches = events["breach"]
         for breach in breaches:
             location = breach[0]
+            id = breach[3]
             unit_owner_self = True if breach[4] == 1 else False
             # When parsing the frame data directly, 
             # 1 is integer for yourself, 2 is opponent (StarterKit code uses 0, 1 as player_index instead)
             if not unit_owner_self:
                 gamelib.debug_write("Got scored on at: {}".format(location))
-                self.scored_on_locations.append(location)
-                gamelib.debug_write("All locations: {}".format(self.scored_on_locations))
+                spawn_coord = self.spawn_stats[turn_num]['id_info'][id]['coord']
+                self.spawn_stats[turn_num]['id_info'][id]['health_taken'] = 1
+
+                self.scored_on_locations.append(spawn_coord)
+        
+        attacks = events["attack"]
+        for attack_event in attacks:
+            if attack_event[6] == 1: # ignore if it is our attack
+                continue
+            
+            attacking_unit = attack_event[4]
+            if attacking_unit == 3:
+                attacking_unit = SCOUT
+            elif attacking_unit == 4:
+                attacking_unit = DEMOLISHER
+            else:
+                continue # ignore other units attacking     
+            
+            attacked_unit = attack_event[5]
+            if attacked_unit == 0:
+                attacked_unit = WALL
+            elif attacked_unit == 1:
+                attacked_unit = SUPPORT
+            elif attacked_unit == 2:
+                attacked_unit = TURRET
+            else:
+                continue # only consider structures being attacked
+            
+            damage = attack_event[2]
+            self.spawn_stats[turn_num]['id_info'][id]['damage_dealt'] += damage
+        
 
 
 if __name__ == "__main__":

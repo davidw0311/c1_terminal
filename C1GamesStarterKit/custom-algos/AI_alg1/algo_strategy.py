@@ -7,6 +7,7 @@ import json
 import numpy as np
 import math
 from copy import deepcopy
+from scipy.optimize import curve_fit
 
 """
 Most of the algo code you write will be in this file unless you create new
@@ -47,8 +48,9 @@ class AlgoStrategy(gamelib.AlgoCore):
         self.spawn_stats = {}
         self.enemy_spawn_history = {}
         self.enemy_attacking_rounds = [] # records the round number where enemy dealt damange or took away health from us
-        self.enemy_attacking_rounds_history = {} # records the round number when enemy attack
-        self.enemy_sending_interceptor_history = {}
+        self.enemy_attack_history = [] # records the mp % used in attack
+        self.enemy_defense_history = [] # records the mp % used in defense
+        self.current_enemy_mp = 0
 
     def on_turn(self, turn_state):
         """
@@ -594,30 +596,55 @@ class AlgoStrategy(gamelib.AlgoCore):
         for structure in best_action['structures']:
             game_state.attempt_spawn(structure['type'], structure['loc'])
 
+    def predict_enemy(self, data):
+        def fourier_series(x, *params):
+            result = 0
+            for i in range(0, len(params), 3):
+                amplitude, frequency, phase = params[i:i+3]
+                result += amplitude * np.sin(frequency * x + phase)
+            return result
+        num_terms = 3 
+        initial_guess = [1.0, 2.0, 0.0] * num_terms
+        x_values = np.linspace(0, 8*np.pi, len(data))
+        data = np.arange(data)
+        params, covariance = curve_fit(fourier_series, x_values, data, p0=initial_guess)
+        return fourier_series(8*np.pi, *params)
 
     def choose_HLA(self, game_state):
         #TODO: implement better logic here, to decide at high level whether to attack, defend, or stall, or use some mixed strategy
         # depending on past opponent attacks, threat level based on opponet's base reconfiguration last turn, how much mp they have
         # somehow store a "memory" of past opponent's attacks, check where their walls are planning to be removed
 
-        strategy = {'Assault': 1.0, 'Harassment': 1.0, 'Plundering': 1.0, 'Defense': 1.0}
-
+        strategy = {'attack': 1.0, 'defend': 1.0, 'stall': 1.0}
+        sub_stategy = {'Assault': 1.0, 'Harassment': 1.0, 'Plundering': 1.0}
         # We focus on the interceptor sending of each side: when, where, how many
 
         our_mp = game_state.get_resource(MP, 0)
-        our_sp = game_state.get_resource(SP, 0)
+        # our_sp = game_state.get_resource(SP, 0)
 
         enemy_mp = game_state.get_resource(MP, 1)
-        enemy_sp = game_state.get_resource(SP, 1)
+        # enemy_sp = game_state.get_resource(SP, 1)
+        self.current_enemy_mp = enemy_mp
 
+    
         if enemy_mp > 5:
-            strategy = {'attack': 0.0, 'defend': 1.0, 'stall': 0.0}
+            strategy['defend'] *= enemy_mp
         elif our_mp > 10:
-            strategy = {'attack': 1.0, 'defend': 0.0, 'stall': 0.0}
+            strategy['attack'] *= our_mp / 5
         else:
-            strategy = {'attack': 0.0, 'defend': 0.0, 'stall': 1.0}
+            strategy['stall'] *= 10
 
-        return strategy
+        strategy['defend'] *= self.predict_enemy(self.enemy_attack_history)
+        strategy['attack'] *= min(5, 0.5 / self.predict_enemy(self.enemy_defense_history))        
+
+        # TODO sub_stategy
+
+        # normalize
+        total = sum(strategy.values())
+        for k in strategy:
+            strategy[k] /= total
+
+        return strategy, sub_stategy
 
     def mcts_strategy(self, game_state):
 
@@ -628,7 +655,7 @@ class AlgoStrategy(gamelib.AlgoCore):
             self.repair_initial_defences(game_state)
             self.build_backline_defences(game_state)
 
-        hla_strategy = self.choose_HLA(game_state)
+        hla_strategy, sub_stategy = self.choose_HLA(game_state)
 
         num = np.random.rand()
         if num <= hla_strategy['attack']:
@@ -648,8 +675,10 @@ class AlgoStrategy(gamelib.AlgoCore):
         if turn_num not in self.spawn_stats:
             gamelib.debug_write('turn num ', turn_num, " not in", self.spawn_stats.keys())
             return
-        # gamelib.debug_write('tallying, spawn_stats=',self.spawn_stats)
-        total_damage_dealt = 0
+        
+        enemy_attack_cost = 0
+        enemy_defense_cost = 0
+
         for coord, stats in self.spawn_stats[turn_num]['coord_to_unit'].items():
             if coord not in self.enemy_spawn_history.keys():
                 self.enemy_spawn_history[coord]={
@@ -670,16 +699,19 @@ class AlgoStrategy(gamelib.AlgoCore):
             if stats[SCOUT] > 0:
                 self.enemy_spawn_history[coord]['times_spawned_scout'] += 1
                 self.enemy_spawn_history[coord]['total_scout_count'] += stats[SCOUT]
+                enemy_attack_cost += stats[SCOUT]
             if stats[DEMOLISHER] > 0:
                 self.enemy_spawn_history[coord]['times_spawned_demolisher'] += 1
                 self.enemy_spawn_history[coord]['total_demolisher_count'] += stats[DEMOLISHER]
+                enemy_attack_cost += stats[DEMOLISHER] * 3
             if stats[INTERCEPTOR] > 0:
                 self.enemy_spawn_history[coord]['times_spawned_interceptor'] += 1
                 self.enemy_spawn_history[coord]['total_interceptor_count'] += stats[INTERCEPTOR]
+                enemy_defense_cost += stats[INTERCEPTOR]
+        self.enemy_attack_history.append(enemy_attack_cost/self.current_enemy_mp)
+        self.enemy_defense_history.append(enemy_defense_cost/self.current_enemy_mp)
 
-            # if stats[DEMOLISHER] > 0:
-            #     gamelib.debug_write("adding demolisher spawn to", coord)
-
+        total_damage_dealt = 0
         total_health_taken = 0
         for id, id_info in self.spawn_stats[turn_num]['id_info'].items():
             spawn_coord = id_info['coord']

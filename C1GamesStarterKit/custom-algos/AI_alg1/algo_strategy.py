@@ -555,7 +555,7 @@ class AlgoStrategy(gamelib.AlgoCore):
         return np.random.rand()
 
 
-    def choose_offence_move(self, game_state):
+    def choose_offence_move(self, game_state, sub_stategy="Assault"):
 
         possible_actions = []
 
@@ -620,29 +620,51 @@ class AlgoStrategy(gamelib.AlgoCore):
         # We focus on the interceptor sending of each side: when, where, how many
 
         our_mp = game_state.get_resource(MP, 0)
-        # our_sp = game_state.get_resource(SP, 0)
+        our_sp = game_state.get_resource(SP, 0)
 
         enemy_mp = game_state.get_resource(MP, 1)
-        # enemy_sp = game_state.get_resource(SP, 1)
+        enemy_sp = game_state.get_resource(SP, 1)
         self.current_enemy_mp = enemy_mp
 
-    
         if enemy_mp > 5:
             strategy['defend'] *= enemy_mp
+            if enemy_mp < 10:
+                strategy['stall'] *= 5
         elif our_mp > 10:
             strategy['attack'] *= our_mp / 5
         else:
             strategy['stall'] *= 10
 
-        strategy['defend'] *= self.predict_enemy(self.enemy_attack_history)
-        strategy['attack'] *= min(5, 0.5 / self.predict_enemy(self.enemy_defense_history))        
+        enemy_attack_p = self.predict_enemy(self.enemy_attack_history)
+        enemy_defense_p = self.predict_enemy(self.enemy_defense_history)
 
-        # TODO sub_stategy
+        strategy['defend'] *= enemy_attack_p
+        strategy['attack'] *= min(5, 0.5 / enemy_defense_p)
+        strategy['stall'] *= max(1, enemy_defense_p * 5)
+
+        # sub_stategy
+        if enemy_defense_p * 2 < sum(self.enemy_defense_history) / len(self.enemy_defense_history):
+            sub_stategy['Assault'] *= 10
+        elif enemy_defense_p < sum(self.enemy_defense_history) / len(self.enemy_defense_history):
+            sub_stategy['Assault'] *= 2
+            sub_stategy['Assault'] *= our_mp / 5    
+        else:
+            sub_stategy['Assault'] *= 0.2
+
+        if enemy_sp < 5:
+            sub_stategy['Plundering'] *= max(2, 5 / enemy_sp)
+            sub_stategy['Plundering'] *= max(1, our_mp * 0.1)
+        else:
+            sub_stategy['Plundering'] *= 0.1
 
         # normalize
         total = sum(strategy.values())
         for k in strategy:
             strategy[k] /= total
+
+        total = sum(sub_stategy.values())
+        for k in sub_stategy:
+            sub_stategy[k] /= total
 
         return strategy, sub_stategy
 
@@ -659,7 +681,7 @@ class AlgoStrategy(gamelib.AlgoCore):
 
         num = np.random.rand()
         if num <= hla_strategy['attack']:
-            self.choose_offence_move(game_state)
+            self.choose_offence_move(game_state, max(sub_stategy, key=sub_stategy.get))
         elif num <= hla_strategy['attack'] + hla_strategy['defend']:
             self.choose_defence_move(game_state) # TODO: David
         else:

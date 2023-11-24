@@ -6,6 +6,7 @@ from sys import maxsize
 import json
 import numpy as np
 
+from gamelib.game_state import GameState 
 """
 Most of the algo code you write will be in this file unless you create new
 modules yourself. Start by modifying the 'on_turn' function.

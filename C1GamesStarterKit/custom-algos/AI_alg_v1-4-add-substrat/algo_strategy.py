@@ -7,6 +7,8 @@ import json
 import numpy as np
 from copy import deepcopy
 import math
+from gamelib.game_state import GameState 
+from scipy.optimize import curve_fit
 """
 Most of the algo code you write will be in this file unless you create new
 modules yourself. Start by modifying the 'on_turn' function.
@@ -27,13 +29,13 @@ class AlgoStrategy(gamelib.AlgoCore):
         super().__init__()
         seed = random.randrange(maxsize)
         random.seed(seed)
-        gamelib.debug_write('Random seed: {}'.format(seed))
+        # gamelib.debug_write('Random seed: {}'.format(seed))
 
     def on_game_start(self, config):
         """ 
         Read in config and perform any initial setup here 
         """
-        gamelib.debug_write('Configuring your custom algo strategy...')
+        # gamelib.debug_write('Configuring your custom algo strategy...')
         self.config = config
         global WALL, SUPPORT, TURRET, SCOUT, DEMOLISHER, INTERCEPTOR, MP, SP
         WALL = config["unitInformation"][0]["shorthand"]
@@ -49,7 +51,10 @@ class AlgoStrategy(gamelib.AlgoCore):
         self.spawn_stats = {}
         self.enemy_spawn_history = {}
         self.enemy_attacking_rounds = [] # records the round number where enemy dealt damange or took away health from us
-
+        self.enemy_attack_history = [] # records the mp % used in attack
+        self.enemy_defense_history = [] # records the mp % used in defense
+        self.current_enemy_mp = 0
+        
     def on_turn(self, turn_state):
         """
         This function is called every turn with the game state wrapper as
@@ -59,7 +64,7 @@ class AlgoStrategy(gamelib.AlgoCore):
         game engine.
         """
         game_state = gamelib.GameState(self.config, turn_state)
-        gamelib.debug_write('Performing turn {} of mcts strategy'.format(game_state.turn_number))
+        # gamelib.debug_write('Performing turn {} of mcts strategy'.format(game_state.turn_number))
         game_state.suppress_warnings(True)  #Comment or remove this line to enable warnings.
 
         game_state.attempt_spawn(INTERCEPTOR, [[7,6], [20,6]], 1)
@@ -67,17 +72,20 @@ class AlgoStrategy(gamelib.AlgoCore):
         self.tally_spawn_stats(game_state)
         
         game_state.submit_turn()
-
-
-    """
-    NOTE: All the methods after this point are part of the sample starter-algo
-    strategy and can safely be replaced for your custom algo.
-    """
     
     def choose_frontline_defence_row(self, game_state):
         self.FRONTLINE_DEFENCE_ROW = 11
         self.BACKLINE_DEFENCE_ROW = 8
-    
+        
+    def build_additional_turrets(self, game_state):
+        turret_locations = [[i, 9] for i in [8,9,13,14,18,19]]  
+        game_state.attempt_spawn(TURRET, turret_locations)
+        
+    def build_supports(self, game_state):
+        support_locations = [[12, 2], [14,2]]
+        game_state.attempt_spawn(SUPPORT, support_locations)
+        
+        
     def build_initial_defences(self, game_state):
         # builds a turret in each corner with walls
         # then depending on FRONTLINE_DEFENCE_ROW, puts a row of 4 turrets evenly spread out with walls in front
@@ -138,7 +146,7 @@ class AlgoStrategy(gamelib.AlgoCore):
         important_wall_locations += [[i, self.FRONTLINE_DEFENCE_ROW] for i in [4,6,11,16,21,23]]   
         # important_wall_locations += [[3,10], [4,9], [5,8], [22,8], [23,9], [24,10]]   
           
-        game_state.attempt_upgrade(self.initial_wall_locations)
+        game_state.attempt_upgrade(important_wall_locations)
     
     def build_selected_path(self, game_state, front_hole, back_hole):
         for loc in self.backline_hole_locations:
@@ -202,7 +210,7 @@ class AlgoStrategy(gamelib.AlgoCore):
         
         if enemy_path: # if the unit is spawned where there is structure, this will return None
             interceptor_speed = 4
-            interceptor_range = 4.5
+            interceptor_range = 4.3
             
             possible_interceptor_spawns = [[7,6], [9,4], [11,2], [13,0], [14,0],[16,2],[18,4],[20,6]]
             interceptor_utility = {}
@@ -236,7 +244,7 @@ class AlgoStrategy(gamelib.AlgoCore):
                 if info['number_of_frames'] > 0:
                     interceptable = True
                     location = loc
-                    number_of_interceptors = max(1, int(num/info['number_of_frames'])) if unit == SCOUT else max(1, int(num))
+                    number_of_interceptors = max(1, int(num/info['number_of_frames']*2)) if unit == SCOUT else max(1, int(num))
                     interception_utility = (35 - info['earliest_frame']) * 2
                     break
             
@@ -290,7 +298,7 @@ class AlgoStrategy(gamelib.AlgoCore):
                         reachable, interceptor_spawn_loc, interceptor_num, interception_utility = self.check_interceptor_reachability(game_state=game_state, unit=SCOUT, num=scout_num, spawn_loc=coord, front_hole=front_hole, back_hole=back_hole)
                         prob = scout_prob
                         
-                    if reachable:   
+                    if reachable:
                         expected_utility = (interception_utility + expected_loss)*prob
                         
                     else:
@@ -309,7 +317,7 @@ class AlgoStrategy(gamelib.AlgoCore):
                         best_plan = plan.copy()
                         
         self.execute_defence_plan(game_state, best_plan)                
-        self.upgrade_structures(game_state)
+        
     
     def calculate_demolisher_utility(self, game_state, spawn_location, front_hole, back_hole, num_units):
         return np.random.rand() # TODO: Brandon
@@ -318,31 +326,38 @@ class AlgoStrategy(gamelib.AlgoCore):
         return np.random.rand()
     
     
-    def choose_offence_move(self, game_state):
+    def choose_offence_move(self, game_state, sub_strategy):
 
         possible_actions = []
         
         # To simplify we will just check sending them from back left and right
-        spawn_location_options = [[13, 0], [14, 0]]
+        spawn_location_options = [[13, 0], [14, 0], [21,7],[6,7]]
         for back_hole in self.backline_hole_locations:
             for front_hole in self.frontline_hole_locations:
                 for spawn_location in spawn_location_options:
                     
-                    num_units = game_state.get_resource(MP, 0)//game_state.type_cost(SCOUT)[MP]
-                    scout_utility = self.calculate_scout_utility(game_state, spawn_location, front_hole, back_hole, num_units)
+                    copied_game_state = deepcopy(game_state)
+                    self.build_selected_path(copied_game_state, front_hole=front_hole, back_hole=back_hole)
+                    
+                    
+                    
+                    num_scouts = int(game_state.get_resource(MP, 0)//game_state.type_cost(SCOUT)[MP])
+                    dmg_util_0, health_util_0, dmg_util_1, health_util_1 = self.simulate_action_pair(game_state, [(SCOUT, num_scouts, [12, 1])], [(SCOUT, 1, [15, 26])])
+
                     possible_actions.append({
-                        "utility": scout_utility, 
+                        "utility": health_util_0*10 + dmg_util_0, 
                         "holes": [front_hole, back_hole],
-                        "units": [{'type': SCOUT, 'num': int(num_units), 'loc': spawn_location}],
+                        "units": [{'type': SCOUT, 'num': int(num_scouts), 'loc': spawn_location}],
                         "structures": []
                         })
                     
-                    num_units = game_state.get_resource(MP, 0)//game_state.type_cost(DEMOLISHER)[MP]
-                    demolisher_utility = self.calculate_demolisher_utility(game_state, spawn_location, front_hole, back_hole, num_units)
+                    num_demolishers = int(game_state.get_resource(MP, 0)//game_state.type_cost(DEMOLISHER)[MP])
+                    dmg_util_0, health_util_0, dmg_util_1, health_util_1 = self.simulate_action_pair(game_state, [(DEMOLISHER, num_demolishers, [12, 1])], [(SCOUT, 1, [15, 15])])
+                    
                     possible_actions.append({
-                        "utility": demolisher_utility, 
+                        "utility": health_util_0*10 + dmg_util_0, 
                         "holes": [front_hole, back_hole],
-                        "units": [{'type': DEMOLISHER, 'num': int(num_units), 'loc': spawn_location}],
+                        "units": [{'type': DEMOLISHER, 'num': int(num_demolishers), 'loc': spawn_location}],
                         "structures": []
                         })
 
@@ -361,29 +376,115 @@ class AlgoStrategy(gamelib.AlgoCore):
             game_state.attempt_spawn(structure['type'], structure['loc'])
        
     
+    # def choose_HLA(self, game_state):
+    #     # Decide at high level whether to attack, defend, or stall, or use some mixed strategy
+    #     # depending on past opponent attacks, threat level based on opponet's base reconfiguration last turn, how much mp they have
+    #     # somehow store a "memory" of past opponent's attacks, check where their walls are planning to be removed
+        
+
+    #     strategy = {'attack': 0.0, 'defend': 0.0, 'stall': 0.0}
+        
+    #     our_mp = game_state.get_resource(MP, 0)
+    #     our_sp = game_state.get_resource(SP, 0)
+        
+    #     enemy_mp = game_state.get_resource(MP, 1)
+    #     enemy_sp = game_state.get_resource(SP, 1)
+    #     gamelib.debug_write('our mp', our_mp, 'enemy mp', enemy_mp)
+        
+    #     threshold = game_state.turn_number // 10 + 6
+    #     if our_mp > threshold:
+    #         percentage = min(1.0, our_mp/10)
+    #         strategy = {'attack': percentage, 'defend': 1-percentage, 'stall': 0.0}
+    #     elif enemy_mp > threshold:
+    #         percentage = min(1.0, enemy_mp/10)
+    #         strategy = {'attack': 1-percentage, 'defend': percentage, 'stall': 0.0}
+    #     else:
+    #         strategy = {'attack': 0.0, 'defend': 1.0, 'stall': 0.0}
+    #     # else:
+    #     #     strategy = {'attack': 0.0, 'defend': 0.0, 'stall': 1.0}
+        
+    #     return strategy
+    
+    
+    def predict_enemy(self, data):
+        def fourier_series(x, *params):
+            result = 0
+            for i in range(0, len(params), 3):
+                amplitude, frequency, phase = params[i:i+3]
+                result += amplitude * np.sin(frequency * x + phase)
+            return result
+        num_terms = 3 
+        initial_guess = [1.0, 2.0, 0.0] * num_terms
+        x_values = np.linspace(0, 8*np.pi, len(data))
+        data = np.array(data)
+        params, covariance = curve_fit(fourier_series, x_values, data, p0=initial_guess)
+        return fourier_series(8*np.pi, *params)
+    
     def choose_HLA(self, game_state):
-        #TODO: implement better logic here, to decide at high level whether to attack, defend, or stall, or use some mixed strategy
+        #Deciding at high level whether to attack, defend, or stall, or use some mixed strategy
         # depending on past opponent attacks, threat level based on opponet's base reconfiguration last turn, how much mp they have
         # somehow store a "memory" of past opponent's attacks, check where their walls are planning to be removed
-        
-        #TODO: Shanhe
-        strategy = {'attack': 0.0, 'defend': 0.0, 'stall': 0.0}
-        
+
+        strategy = {'attack': 1.0, 'defend': 1.0, 'stall': 1.0}
+        sub_stategy = {'Assault': 1.0, 'Harassment': 1.0, 'Plundering': 1.0}
+        # We focus on the interceptor sending of each side: when, where, how many
+
         our_mp = game_state.get_resource(MP, 0)
         our_sp = game_state.get_resource(SP, 0)
-        
+
         enemy_mp = game_state.get_resource(MP, 1)
         enemy_sp = game_state.get_resource(SP, 1)
+        self.current_enemy_mp = enemy_mp
+
+        extra_mp = game_state.turn_number // 10 
+        lower_defend_threshold = 5 + extra_mp
+        upper_defend_threshold = 10 + extra_mp
+        attack_threshold = 10 + extra_mp
+        lower_plundering_threshold = 5 + extra_mp
+        upper_plundering_threshold = 5 + extra_mp
         
-        
-        if our_mp > 6:
-            strategy = {'attack': 0.7, 'defend': 0.3, 'stall': 0.0}
+        if enemy_mp > lower_defend_threshold:
+            strategy['defend'] *= enemy_mp
+            if enemy_mp < upper_defend_threshold:
+                strategy['stall'] *= 5
+        elif our_mp > attack_threshold:
+            strategy['attack'] *= our_mp / 5
         else:
-            strategy = {'attack': 0.0, 'defend': 1.0, 'stall': 0.0}
-        # else:
-        #     strategy = {'attack': 0.0, 'defend': 0.0, 'stall': 1.0}
+            strategy['stall'] *= 10
+
+        enemy_attack_p = self.predict_enemy(self.enemy_attack_history)
+        enemy_defense_p = self.predict_enemy(self.enemy_defense_history)
+
+        strategy['defend'] *= enemy_attack_p
+        strategy['attack'] *= min(5, 0.5 / enemy_defense_p)
+        strategy['stall'] *= max(1, enemy_defense_p * 5)
+
+        # sub_stategy
+        if enemy_defense_p * 2 < sum(self.enemy_defense_history) / len(self.enemy_defense_history):
+            sub_stategy['Assault'] *= 10
+        elif enemy_defense_p < sum(self.enemy_defense_history) / len(self.enemy_defense_history):
+            sub_stategy['Assault'] *= 2
+            sub_stategy['Assault'] *= our_mp / 5    
+        else:
+            sub_stategy['Assault'] *= 0.2
+
         
-        return strategy
+        if enemy_sp < 5:
+            sub_stategy['Plundering'] *= max(lower_plundering_threshold, upper_plundering_threshold / enemy_sp)
+            sub_stategy['Plundering'] *= max(1, our_mp * 0.1)
+        else:
+            sub_stategy['Plundering'] *= 0.1
+
+        # normalize
+        total = sum(strategy.values())
+        for k in strategy:
+            strategy[k] /= total
+
+        total = sum(sub_stategy.values())
+        for k in sub_stategy:
+            sub_stategy[k] /= total
+
+        return strategy, sub_stategy
     
     def mcts_strategy(self, game_state):
         
@@ -394,19 +495,26 @@ class AlgoStrategy(gamelib.AlgoCore):
             self.repair_initial_defences(game_state)
             self.build_backline_defences(game_state)
             
-        hla_strategy = self.choose_HLA(game_state)
+        hla_strategy, sub_strategy = self.choose_HLA(game_state)
         
+        
+        gamelib.debug_write('choosing hla strat:', hla_strategy)
         num = np.random.rand()
         if num <= hla_strategy['attack']:
-            self.choose_offence_move(game_state)
+            gamelib.debug_write("performing attack on turn ", game_state.turn_number)
+            self.choose_offence_move(game_state, sub_strategy)
         elif num <= hla_strategy['attack'] + hla_strategy['defend']:
+            gamelib.debug_write("performing defence on turn ", game_state.turn_number)
             self.choose_defence_move(game_state) # TODO: David
         else:
             # do nothing
             pass
         
         self.repair_initial_defences(game_state)
-        self.reset_wall_openings(game_state)    
+        self.reset_wall_openings(game_state)  
+        self.build_supports(game_state)  
+        self.upgrade_structures(game_state)
+        self.build_additional_turrets(game_state)
     
     def tally_spawn_stats(self, game_state):
         
@@ -455,8 +563,8 @@ class AlgoStrategy(gamelib.AlgoCore):
             self.enemy_spawn_history[spawn_coord]['damage_dealt'] += id_info['damage_dealt']
             total_damage_dealt += id_info['damage_dealt']
         
-        gamelib.debug_write(f"damage dealt on round {turn_num}", total_damage_dealt)
-        gamelib.debug_write(f"health taken on round {turn_num}", total_health_taken)
+        gamelib.debug_write(f"damage dealt by oponent on round {turn_num}", total_damage_dealt)
+        gamelib.debug_write(f"health taken by oppoenent on round {turn_num}", total_health_taken)
         if total_damage_dealt > 0 or total_health_taken > 0:
             self.enemy_attacking_rounds.append(turn_num)
         # gamelib.debug_write("turn num: ", turn_num, "enemy spawn history", self.enemy_spawn_history)
@@ -546,7 +654,252 @@ class AlgoStrategy(gamelib.AlgoCore):
             
             damage = attack_event[2]
             self.spawn_stats[turn_num]['id_info'][attacking_id]['damage_dealt'] += damage
+    
+    def _attack_unit(self, game_state, unit, loc, damage):
+        structures_destroyed = False
+        unit_dmg = 0
+        all_units_at_loc = game_state.game_map[loc]
+        units_of_type = [_unit_of_type for _unit_of_type in all_units_at_loc if _unit_of_type.unit_type == unit.unit_type and _unit_of_type.player_index == unit.player_index]
+        units_to_destroy = []
+        while damage > 0 and len(units_of_type) > 0:
+            unit = units_of_type[-1]
+            dmg_done = min(unit.health, damage)
+            
+            # Unit will be destroyed
+            if unit.health <= damage:
+                structures_destroyed = unit.stationary
+                unit.health = 0
+                damage -= unit.health
+                units_to_destroy.append((loc, units_of_type.pop()))
+
+            else:
+                # Update unit health
+                unit.health -= damage
+                damage = 0
+
+            # Impossible to stack multiple structures. If unit.stationary, both condition in if 
+            # statement will result in termination of while loop
+            if unit.stationary:
+                unit_dmg += dmg_done
+
+        return unit_dmg, structures_destroyed, units_to_destroy
+
+    def _is_valid_attacker(self, game_state, location, attacker):
+        atk_range = attacker.attackRange
+        loc = (attacker.x, attacker.y)
+        return atk_range >= game_state.game_map.distance_between_locations(location, loc)
+
+    def _taken_dmg(self, game_state, location, health, player_index, only_stationary=True):
+        damage = 0
+        attackers = game_state.get_attackers(location, player_index)
+        if only_stationary:
+            attackers = [attacker for attacker in attackers if attacker.stationary]
+        for attacker in attackers:
+            if not self._is_valid_attacker(game_state, location, attacker):
+                continue
+            damage += attacker.damage_f
+        return damage
+
+    def _dealt_dmg(self, game_state, unit):
+        unit_to_attack = game_state.get_target(unit)
+        if unit_to_attack is None:
+            return None
+
+        damage = unit.damage_f if unit_to_attack.stationary else unit.damage_i
+        return unit_to_attack, damage
+
+
+    def _spawn_units(self, game_state, actions, enemy=False):
+        # Stores a set of units spawned as a dictionary with location as key and a list of units at the location.
+        # One element in the list would indicate a specific type of unit, its respective GameUnit, initial edge and path
+        mobiles = {}
+        for action in actions:
+            unit, num, location = action
+
+            if enemy:
+                for i in range(num):
+                    game_state.game_map.add_unit(unit, location, player_index=1)
+                num_spawned = num
+            else:
+                num_spawned = game_state.attempt_spawn(unit, location, num=num)
+            if num_spawned == 0:
+                continue
+            if unit in [SCOUT, DEMOLISHER, INTERCEPTOR]:
+                location_tup = tuple(location)
+                unit_stack = [x for x in game_state.game_map[location_tup] if x.unit_type == unit]
+                edge = game_state.get_target_edge(location)
+                if location_tup not in mobiles:
+                    mobiles[location_tup] = [[unit, unit_stack, edge, None]]
+                else:
+                    mobiles[location_tup].append([unit, unit_stack, edge, None])
+
+        return mobiles    
+
+    def _inner_interact(self, game_state, mobiles, target_mobiles):
+        structure_destroyed = False
+        unit_dmg = 0
+        units_to_destroy = []
+
+        for location, unit_list in mobiles.items():
+            # gamelib.debug_write('unit list', unit_list)
+            for unit_details in unit_list:
+                if not unit_details[1]:
+                    continue
+                unit = unit_details[1][0]
+                action_result = self._dealt_dmg(game_state, unit)
+                if action_result is None:
+                    continue
+                # Target found, get damage done
+                unit_to_attack, damage = action_result
+
+                # Compute number of units destroyed / health lowered and apply to the game units
+                num_attack_units = len(unit_details[1])
+                effective_dmg = damage * num_attack_units
+
+                attack_location = unit_to_attack.x, unit_to_attack.y
+                
+                _unit_dmg, _structures_destroyed, _units_to_destroy = \
+                    self._attack_unit(game_state, unit_to_attack, attack_location, effective_dmg)
+
+                unit_dmg += _unit_dmg
+                structure_destroyed = structure_destroyed or _structures_destroyed
+                units_to_destroy.extend(_units_to_destroy)
+
+        return unit_dmg, structure_destroyed, units_to_destroy
+                
+
+    def _interact(self, game_state, friendly_mobiles, enemy_mobiles):
+        # gamelib.debug_write("Interacting")
+        # If mobiles are destroyed, update the dictionary with remove
+        structure_destroyed = False
+
+        unit_dmg_0, _structure_destroyed, enemies_to_destroy = \
+            self._inner_interact(game_state, friendly_mobiles, enemy_mobiles)
+        structure_destroyed = structure_destroyed or _structure_destroyed
+
+        unit_dmg_1, _structure_destroyed, friendlies_to_destroy = \
+            self._inner_interact(game_state, enemy_mobiles, friendly_mobiles)
+        structure_destroyed = structure_destroyed or _structure_destroyed
+                
+        for loc, unit in enemies_to_destroy:
+            # gamelib.debug_write(f"Enemy to destroy {unit}")
+            game_state.game_map[loc].remove(unit)
+            if loc in enemy_mobiles:
+                for unit_details in enemy_mobiles[loc]:
+                    if unit in unit_details[1]:
+                        unit_details[1].remove(unit)
+
+        for loc, unit in friendlies_to_destroy:
+            # gamelib.debug_write(f"Friendly to destroy {unit}")
+            game_state.game_map[loc].remove(unit)
+            if loc in friendly_mobiles:
+                for unit_details in friendly_mobiles[loc]:
+                    if unit in unit_details[1]:
+                        unit_details[1].remove(unit)
+
+        return unit_dmg_0, unit_dmg_1, structure_destroyed
+
+    def _inner_step_mobiles(self, game_state, mobiles):
+        new_mobiles = {}
+        health_dmg = 0
+        for _, unit_list in mobiles.items():
+            for unit_details in unit_list:
+                if unit_details[3] is None:
+                    continue
+
+                if unit_details[3] is not None and len(unit_details[3]) == 1:
+                    # Score!
+                    # gamelib.debug_write(f"{len(unit_details[1])} units scored! unit_details")
+                    health_dmg += len(unit_details[1])
+                    continue
+
+                new_location = unit_details[3][1]
+                new_path = unit_details[3][1:]
+                unit_details[3] = new_path
+
+                new_location_tup = tuple(new_location)
+                
+                if new_location_tup not in new_mobiles:
+                    new_mobiles[new_location_tup] = [unit_details]
+                else:
+                    new_mobiles[new_location_tup].append(unit_details)
+
+                # Add the game units into the list
+                game_state.game_map[new_location_tup].extend(unit_details[1])
+
+                for unit in unit_details[1]:
+                    unit.x = new_location[0]
+                    unit.y = new_location[1]
+
+        return health_dmg, new_mobiles
+
+
+    def _step(self, game_state, friendly_mobiles, enemy_mobiles):
+        # gamelib.debug_write("Stepping")
+        # If mobiles hit pass edge, then just delete them from the dictionary and return the dmg done
+        for location in friendly_mobiles.keys():
+            game_state.game_map.remove_unit(location)
+
+        for location in enemy_mobiles.keys():
+            game_state.game_map.remove_unit(location)
         
+        health_dmg_0, friendly_mobiles = self._inner_step_mobiles(game_state, friendly_mobiles)
+        health_dmg_1, enemy_mobiles = self._inner_step_mobiles(game_state, enemy_mobiles)
+
+        return health_dmg_0, friendly_mobiles, health_dmg_1, enemy_mobiles
+
+
+    def _get_path_for_mobiles(self, game_state, mobiles):
+        for location, unit_list in mobiles.items():
+            for i, (_, _, edge, path) in enumerate(unit_list):
+                path = game_state.find_path_to_edge(location, edge)
+                unit_list[i][3] = path
+        return mobiles
+
+    def simulate_action_pair(self, game_state, action_0=None, action_1=None):
+        """
+        Define an action as unit, num, location.
+
+        Local copy of game_state is deep copied to prevent mutation. Simply resumbit the chosen
+        action on the original game_state to submit the action outside of this function.
+        """
+
+        # Should suffice for a deep copy as game map is reinitialized
+        game_state = GameState(game_state.config, game_state.serialized_string)
+
+        # gamelib.debug_write("Start simulation")
+
+        dmg_utility_0 = 0
+        dmg_utility_1 = 0
+        health_utility_0 = 0
+        health_utility_1 = 0
+
+        friendly_mobiles = self._spawn_units(game_state, action_0) if action_0 is not None else {}
+        enemy_mobiles = self._spawn_units(game_state, action_1, enemy=True) if action_1 is not None else {}
+
+        friendly_mobiles = self._get_path_for_mobiles(game_state, friendly_mobiles)
+        enemy_mobiles = self._get_path_for_mobiles(game_state, enemy_mobiles)
+
+        while len(friendly_mobiles) + len(enemy_mobiles):
+            # gamelib.debug_write(len(friendly_mobiles), len(enemy_mobiles))
+            unit_dmg_0, unit_dmg_1, struct_destroyed = \
+                self._interact(game_state, friendly_mobiles, enemy_mobiles)
+            dmg_utility_0 += unit_dmg_0
+            dmg_utility_1 += unit_dmg_1
+            # Update routing when structure is destroyed as pathing may change
+            if struct_destroyed:
+                friendly_mobiles = self._get_path_for_mobiles(game_state, friendly_mobiles)
+                enemy_mobiles = self._get_path_for_mobiles(game_state, enemy_mobiles)
+            health_dmg_0, friendly_mobiles, health_dmg_1, enemy_mobiles = \
+                self._step(game_state, friendly_mobiles, enemy_mobiles)
+            health_utility_0 += health_dmg_0 
+            health_utility_1 += health_dmg_1
+            # gamelib.debug_write(len(friendly_mobiles), len(enemy_mobiles))
+
+        # gamelib.debug_write(f"Utilities: dmg_0: {dmg_utility_0} dmg_1: {dmg_utility_1} health_0: {health_dmg_0} health_1: {health_dmg_1}")
+
+        return dmg_utility_0, health_utility_0, dmg_utility_1, health_utility_1
+    
     def build_defences(self, game_state):
         """
         Build basic defenses using hardcoded locations.
